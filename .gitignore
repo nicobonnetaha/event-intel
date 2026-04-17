@@ -1,0 +1,15 @@
+__pycache__/
+*.pyc
+*.pyo
+*.db
+*.sqlite3
+.env
+.env.local
+.env*.local
+.vercel/
+node_modules/
+*.egg-info/
+dist/
+build/
+.DS_Store
+.vercel

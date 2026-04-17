@@ -1,0 +1,478 @@
+import asyncio
+import csv
+import io
+import sys
+import os
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Optional
+
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, UploadFile, File, Form
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel
+from sqlalchemy.orm import Session
+
+sys.path.insert(0, os.path.dirname(__file__))
+
+from database import get_db, init_db
+from models import Event, Participant, Setting
+from scorer import score_participant
+from scrapers.luma import fetch_event_and_guests, fetch_event_metadata, extract_event_ids_from_cookie, parse_guest
+from scrapers.enricher import enrich_participant
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+
+
+app = FastAPI(title="Event Intel", lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+FRONTEND_DIR = Path(__file__).parent.parent / "frontend"
+app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
+
+
+# ── Pydantic schemas ──────────────────────────────────────────────────────────
+
+class EventCreate(BaseModel):
+    url: str
+    auth_token: Optional[str] = None  # optional if already saved
+
+
+class ParticipantManual(BaseModel):
+    name: str
+    company: Optional[str] = None
+    job_title: Optional[str] = None
+    email: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    twitter_handle: Optional[str] = None
+    telegram_handle: Optional[str] = None
+    bio: Optional[str] = None
+
+
+# ── Settings ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/settings/luma-token")
+def get_luma_token(db: Session = Depends(get_db)):
+    row = db.query(Setting).filter(Setting.key == "luma_token").first()
+    return {"connected": bool(row and row.value)}
+
+
+@app.post("/api/settings/luma-token")
+def save_luma_token(payload: dict, db: Session = Depends(get_db)):
+    token = (payload.get("token") or "").strip()
+    if not token:
+        raise HTTPException(status_code=400, detail="Token vide")
+    row = db.query(Setting).filter(Setting.key == "luma_token").first()
+    if row:
+        row.value = token
+    else:
+        db.add(Setting(key="luma_token", value=token))
+    db.commit()
+    return {"ok": True}
+
+
+@app.delete("/api/settings/luma-token")
+def delete_luma_token(db: Session = Depends(get_db)):
+    db.query(Setting).filter(Setting.key == "luma_token").delete()
+    db.commit()
+    return {"ok": True}
+
+
+@app.get("/api/luma/my-events")
+async def get_my_luma_events(db: Session = Depends(get_db)):
+    """List all events found in the stored cookie + their metadata."""
+    row = db.query(Setting).filter(Setting.key == "luma_token").first()
+    if not row or not row.value:
+        raise HTTPException(status_code=400, detail="Token Luma non configuré")
+
+    token = row.value
+    event_ids = extract_event_ids_from_cookie(token)
+
+    if not event_ids:
+        return {"events": [], "hint": "no_ids_in_cookie"}
+
+    # Fetch metadata for all events concurrently (max 10 at a time)
+    import asyncio
+    semaphore = asyncio.Semaphore(10)
+
+    async def fetch_one(eid):
+        async with semaphore:
+            meta = await fetch_event_metadata(eid, token)
+            if not meta:
+                return None
+            # Mark if already imported
+            existing = db.query(Event).filter(Event.luma_id == meta["luma_id"]).first()
+            meta["already_imported"] = bool(existing)
+            meta["luma_url"] = f"https://lu.ma/{meta['url']}" if meta.get("url") else ""
+            return meta
+
+    results = await asyncio.gather(*[fetch_one(eid) for eid in event_ids])
+    # Keep only confirmed registrations (approved = going)
+    events = [r for r in results if r and r.get("approval_status") == "approved"]
+    # Sort: future first, then past descending
+    from datetime import datetime, timezone
+
+    def sort_key(e):
+        try:
+            return datetime.fromisoformat(e["date"].replace("Z", "+00:00"))
+        except Exception:
+            return datetime.min.replace(tzinfo=timezone.utc)
+
+    now = datetime.now(timezone.utc)
+    future = sorted([e for e in events if sort_key(e) >= now], key=sort_key)
+    past = sorted([e for e in events if sort_key(e) < now], key=sort_key, reverse=True)
+
+    return {"events": future + past}
+
+
+# ── Frontend ──────────────────────────────────────────────────────────────────
+
+@app.get("/")
+async def serve_frontend():
+    return FileResponse(str(FRONTEND_DIR / "index.html"))
+
+
+# ── Events ────────────────────────────────────────────────────────────────────
+
+@app.get("/api/events")
+def list_events(sort: str = "date_desc", db: Session = Depends(get_db)):
+    q = db.query(Event)
+    if sort == "date_asc":
+        q = q.order_by(Event.date.asc().nullslast())
+    else:
+        q = q.order_by(Event.date.desc().nullslast())
+    return [_event_dict(e) for e in q.all()]
+
+
+@app.post("/api/events/import-luma")
+async def import_from_luma(
+    payload: EventCreate,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    token = payload.auth_token or ""
+    if not token.strip():
+        row = db.query(Setting).filter(Setting.key == "luma_token").first()
+        token = row.value if row else ""
+    if not token.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="Aucun token Luma configuré. Connecte ton compte Luma d'abord."
+        )
+    try:
+        data = await fetch_event_and_guests(payload.url, token)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+    event = db.query(Event).filter(Event.luma_id == data["luma_id"]).first()
+    if not event:
+        event = Event(
+            luma_id=data["luma_id"],
+            name=data["name"],
+            url=payload.url,
+            date=data.get("date", ""),
+            location=data.get("location", ""),
+        )
+        db.add(event)
+        db.commit()
+        db.refresh(event)
+
+    guests = data.get("guests", [])
+    added = 0
+    for raw in guests:
+        parsed = parse_guest(raw)
+        if not parsed.get("name"):
+            continue
+        existing = db.query(Participant).filter(
+            Participant.event_id == event.id,
+            Participant.luma_user_id == parsed.get("luma_user_id"),
+        ).first()
+        if existing:
+            continue
+        score, label, reason = score_participant(
+            parsed["name"],
+            parsed.get("company"),
+            parsed.get("job_title"),
+            parsed.get("bio"),
+            None,
+        )
+        p = Participant(
+            event_id=event.id,
+            score=score,
+            score_label=label,
+            score_reason=reason,
+            **{k: v for k, v in parsed.items()},
+        )
+        db.add(p)
+        added += 1
+
+    event.participant_count = db.query(Participant).filter(
+        Participant.event_id == event.id
+    ).count()
+    db.commit()
+
+    return {"event": _event_dict(event), "imported": added}
+
+
+@app.post("/api/events/create-manual")
+def create_manual_event(
+    name: str = Form(...),
+    url: str = Form(""),
+    db: Session = Depends(get_db),
+):
+    event = Event(name=name, url=url)
+    db.add(event)
+    db.commit()
+    db.refresh(event)
+    return _event_dict(event)
+
+
+@app.delete("/api/events/{event_id}")
+def delete_event(event_id: int, db: Session = Depends(get_db)):
+    event = db.query(Event).filter(Event.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+    db.query(Participant).filter(Participant.event_id == event_id).delete()
+    db.delete(event)
+    db.commit()
+    return {"ok": True}
+
+
+# ── Participants ──────────────────────────────────────────────────────────────
+
+@app.get("/api/events/{event_id}/participants")
+def list_participants(
+    event_id: int,
+    search: str = "",
+    priority: str = "",
+    db: Session = Depends(get_db),
+):
+    q = db.query(Participant).filter(Participant.event_id == event_id)
+    if search:
+        like = f"%{search.lower()}%"
+        q = q.filter(
+            (Participant.name.ilike(like))
+            | (Participant.company.ilike(like))
+            | (Participant.job_title.ilike(like))
+        )
+    if priority:
+        q = q.filter(Participant.score_label == priority)
+    participants = q.order_by(Participant.score.desc()).all()
+    return [_participant_dict(p) for p in participants]
+
+
+@app.post("/api/events/{event_id}/participants")
+def add_participant(
+    event_id: int,
+    payload: ParticipantManual,
+    db: Session = Depends(get_db),
+):
+    event = db.query(Event).filter(Event.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    score, label, reason = score_participant(
+        payload.name, payload.company, payload.job_title, payload.bio, None
+    )
+    p = Participant(
+        event_id=event_id,
+        score=score,
+        score_label=label,
+        score_reason=reason,
+        **payload.model_dump(),
+    )
+    db.add(p)
+    event.participant_count = (event.participant_count or 0) + 1
+    db.commit()
+    db.refresh(p)
+    return _participant_dict(p)
+
+
+@app.post("/api/events/{event_id}/import-csv")
+async def import_csv(
+    event_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+):
+    event = db.query(Event).filter(Event.id == event_id).first()
+    if not event:
+        raise HTTPException(status_code=404, detail="Event not found")
+
+    content = await file.read()
+    text = content.decode("utf-8-sig")
+    reader = csv.DictReader(io.StringIO(text))
+
+    added = 0
+    for row in reader:
+        name = row.get("name") or row.get("Name") or row.get("nom") or ""
+        if not name.strip():
+            continue
+        company = row.get("company") or row.get("Company") or row.get("société") or None
+        job_title = row.get("job_title") or row.get("title") or row.get("Job Title") or row.get("poste") or None
+        email = row.get("email") or row.get("Email") or None
+        linkedin = row.get("linkedin") or row.get("LinkedIn") or None
+        twitter = row.get("twitter") or row.get("Twitter") or None
+        telegram = row.get("telegram") or row.get("Telegram") or None
+        bio = row.get("bio") or row.get("Bio") or None
+
+        score, label, reason = score_participant(name, company, job_title, bio, None)
+        p = Participant(
+            event_id=event_id,
+            name=name.strip(),
+            company=company,
+            job_title=job_title,
+            email=email,
+            linkedin_url=linkedin,
+            twitter_handle=twitter,
+            telegram_handle=telegram,
+            bio=bio,
+            score=score,
+            score_label=label,
+            score_reason=reason,
+        )
+        db.add(p)
+        added += 1
+
+    event.participant_count = db.query(Participant).filter(
+        Participant.event_id == event_id
+    ).count()
+    db.commit()
+    return {"imported": added}
+
+
+@app.get("/api/participants/{participant_id}")
+def get_participant(participant_id: int, db: Session = Depends(get_db)):
+    p = db.query(Participant).filter(Participant.id == participant_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Not found")
+    return _participant_dict(p)
+
+
+@app.post("/api/participants/{participant_id}/enrich")
+async def enrich_one(
+    participant_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    p = db.query(Participant).filter(Participant.id == participant_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Not found")
+    if p.enriching:
+        return {"status": "already_running"}
+    p.enriching = True
+    db.commit()
+    background_tasks.add_task(_do_enrich, participant_id)
+    return {"status": "started"}
+
+
+@app.post("/api/events/{event_id}/enrich-all")
+async def enrich_all(
+    event_id: int,
+    background_tasks: BackgroundTasks,
+    db: Session = Depends(get_db),
+):
+    participants = (
+        db.query(Participant)
+        .filter(Participant.event_id == event_id, Participant.enriched == False)
+        .order_by(Participant.score.desc())
+        .all()
+    )
+    ids = [p.id for p in participants]
+    for p in participants:
+        p.enriching = True
+    db.commit()
+    background_tasks.add_task(_do_enrich_batch, ids)
+    return {"status": "started", "count": len(ids)}
+
+
+# ── Background tasks ──────────────────────────────────────────────────────────
+
+async def _do_enrich(participant_id: int):
+    from database import SessionLocal
+    db = SessionLocal()
+    try:
+        p = db.query(Participant).filter(Participant.id == participant_id).first()
+        if not p:
+            return
+        updates = await enrich_participant(
+            p.name, p.company, p.job_title, p.linkedin_url
+        )
+        for k, v in updates.items():
+            if v and not getattr(p, k):
+                setattr(p, k, v)
+        # Re-score with enriched data
+        score, label, reason = score_participant(
+            p.name, p.company, p.job_title, p.bio, p.company_description
+        )
+        p.score = score
+        p.score_label = label
+        p.score_reason = reason
+        p.enriched = True
+        p.enriching = False
+        db.commit()
+    except Exception:
+        p = db.query(Participant).filter(Participant.id == participant_id).first()
+        if p:
+            p.enriching = False
+            db.commit()
+    finally:
+        db.close()
+
+
+async def _do_enrich_batch(ids: list[int]):
+    for pid in ids:
+        await _do_enrich(pid)
+        await asyncio.sleep(2)
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _event_dict(e: Event) -> dict:
+    return {
+        "id": e.id,
+        "luma_id": e.luma_id,
+        "name": e.name,
+        "url": e.url,
+        "date": e.date,
+        "location": e.location,
+        "participant_count": e.participant_count,
+        "created_at": e.created_at.isoformat() if e.created_at else None,
+    }
+
+
+def _participant_dict(p: Participant) -> dict:
+    return {
+        "id": p.id,
+        "event_id": p.event_id,
+        "name": p.name,
+        "email": p.email,
+        "company": p.company,
+        "job_title": p.job_title,
+        "linkedin_url": p.linkedin_url,
+        "twitter_handle": p.twitter_handle,
+        "telegram_handle": p.telegram_handle,
+        "instagram_handle": p.instagram_handle,
+        "tiktok_handle": p.tiktok_handle,
+        "youtube_handle": p.youtube_handle,
+        "website": p.website,
+        "bio": p.bio,
+        "company_description": p.company_description,
+        "score": p.score,
+        "score_label": p.score_label,
+        "score_reason": p.score_reason,
+        "enriched": p.enriched,
+        "enriching": p.enriching,
+        "avatar_url": p.avatar_url,
+        "location": p.location,
+    }

@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Event Intel — The Aha Company</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    body { font-family: system-ui, -apple-system, sans-serif; }
+    .score-high   { background:#dcfce7; color:#166534; }
+    .score-medium { background:#fef9c3; color:#854d0e; }
+    .score-low    { background:#f1f5f9; color:#64748b; }
+    .score-bar { height:6px; border-radius:9999px; background:#e2e8f0; }
+    .score-fill-high   { background:#22c55e; }
+    .score-fill-medium { background:#eab308; }
+    .score-fill-low    { background:#94a3b8; }
+    .sidebar-event.active { background:#eef2ff; border-left:3px solid #6366f1; }
+    .sidebar-event.selected { background:#f0f9ff; border-left:3px solid #0ea5e9; }
+    .spinning { animation:spin 1s linear infinite; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    tr:hover td { background:#f8fafc; }
+    .tag { display:inline-block; padding:1px 8px; border-radius:9999px; font-size:11px; font-weight:600; }
+    ::-webkit-scrollbar { width:5px; height:5px; }
+    ::-webkit-scrollbar-thumb { background:#cbd5e1; border-radius:3px; }
+  </style>
+</head>
+<body class="bg-gray-50 text-gray-900 h-screen flex overflow-hidden">
+
+<!-- ═══ SIDEBAR ═══ -->
+<aside class="w-64 bg-white border-r border-gray-200 flex flex-col flex-shrink-0 h-full">
+
+  <div class="p-4 border-b border-gray-100">
+    <div class="flex items-center gap-2 mb-1">
+      <div class="w-7 h-7 bg-black rounded flex items-center justify-center text-white text-xs font-bold">Aha</div>
+      <span class="font-bold text-sm">Event Intel</span>
+    </div>
+    <p class="text-xs text-gray-400">The Aha Company</p>
+  </div>
+
+  <div class="p-3 border-b border-gray-100 space-y-2">
+    <button onclick="openAddEventModal()"
+      class="w-full text-sm bg-indigo-600 hover:bg-indigo-700 text-white py-2 px-3 rounded-lg font-medium transition">
+      + Ajouter un événement
+    </button>
+    <button id="sync-btn" onclick="syncMyEvents()" class="hidden w-full text-sm bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 py-2 px-3 rounded-lg font-medium transition">
+      ↻ Sync mes events Luma
+    </button>
+    <div id="luma-status-badge" class="hidden text-xs text-center py-1.5 rounded-lg"></div>
+  </div>
+
+  <div class="px-3 pt-2 pb-1 flex items-center justify-between flex-shrink-0">
+    <span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Événements</span>
+    <div class="flex items-center gap-2">
+      <button id="sort-btn" onclick="toggleSort()"
+        class="text-xs text-gray-400 hover:text-indigo-600 transition flex items-center gap-1">
+        <span id="sort-icon">↓</span><span id="sort-label">Récent</span>
+      </button>
+      <button id="select-toggle-btn" onclick="toggleSelectMode()"
+        class="text-xs text-gray-400 hover:text-indigo-600 transition">Sélect.</button>
+    </div>
+  </div>
+
+  <div class="flex-1 overflow-y-auto px-2 pb-2" id="event-list">
+    <p class="text-xs text-gray-400 px-2 pt-2">Aucun événement</p>
+  </div>
+
+  <!-- Bulk delete bar (hidden by default) -->
+  <div id="bulk-bar" class="hidden border-t border-gray-100 px-3 py-2.5 flex items-center justify-between bg-white flex-shrink-0">
+    <span id="bulk-count" class="text-xs text-gray-500">0 sélectionné(s)</span>
+    <div class="flex items-center gap-2">
+      <button onclick="selectAllEvents()" class="text-xs text-indigo-600 hover:underline">Tout</button>
+      <button onclick="deleteSelectedEvents()"
+        class="text-xs bg-red-500 hover:bg-red-600 text-white px-3 py-1.5 rounded-lg font-medium transition">
+        Supprimer
+      </button>
+    </div>
+  </div>
+
+  <div class="p-3 border-t border-gray-100 text-xs text-gray-400 text-center flex-shrink-0">
+    Nicolas & Enzo · 2025
+  </div>
+</aside>
+
+<!-- ═══ MAIN ═══ -->
+<main class="flex-1 flex flex-col overflow-hidden">
+
+  <header class="bg-white border-b border-gray-200 px-6 py-3 flex items-center justify-between flex-shrink-0">
+    <div id="event-header">
+      <h1 class="text-base font-semibold text-gray-700">Sélectionne un événement</h1>
+    </div>
+    <div id="toolbar" class="flex items-center gap-2 hidden">
+      <input id="search" type="text" placeholder="Rechercher…"
+        class="text-sm border border-gray-200 rounded-lg px-3 py-1.5 w-48 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+        oninput="filterParticipants()" />
+      <select id="priority-filter" onchange="filterParticipants()"
+        class="text-sm border border-gray-200 rounded-lg px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-indigo-300">
+        <option value="">Toutes priorités</option>
+        <option value="Haute priorité">Haute priorité</option>
+        <option value="Priorité moyenne">Priorité moyenne</option>
+        <option value="Faible priorité">Faible priorité</option>
+      </select>
+      <button onclick="enrichAll()"
+        class="text-sm bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-lg font-medium transition">
+        ✨ Enrichir tout
+      </button>
+      <label class="text-sm bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-700 px-3 py-1.5 rounded-lg font-medium cursor-pointer transition">
+        ↑ CSV
+        <input type="file" accept=".csv" class="hidden" onchange="importCSV(event)" />
+      </label>
+    </div>
+  </header>
+
+  <div class="flex-1 overflow-auto px-6 py-4" id="table-area">
+    <div class="text-center text-gray-400 mt-20">
+      <svg class="w-12 h-12 mx-auto mb-4 opacity-30" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0z"/>
+      </svg>
+      <p class="text-sm">Ajoute un événement pour commencer</p>
+    </div>
+  </div>
+
+  <div id="stats-bar" class="bg-white border-t border-gray-100 px-6 py-2 flex gap-6 text-xs text-gray-500 hidden">
+    <span id="stat-total"></span>
+    <span id="stat-high" class="text-green-600 font-medium"></span>
+    <span id="stat-medium" class="text-yellow-600 font-medium"></span>
+    <span id="stat-enriched" class="text-indigo-600"></span>
+  </div>
+</main>
+
+<!-- ═══ DETAIL PANEL ═══ -->
+<div id="detail-panel" class="hidden fixed inset-y-0 right-0 w-96 bg-white border-l border-gray-200 shadow-xl z-40 overflow-y-auto">
+  <div class="sticky top-0 bg-white border-b border-gray-100 px-5 py-3 flex items-center justify-between">
+    <span class="font-semibold text-sm">Détail du participant</span>
+    <button onclick="closePanel()" class="text-gray-400 hover:text-gray-600 text-lg leading-none">✕</button>
+  </div>
+  <div id="panel-content" class="p-5"></div>
+</div>
+<div id="panel-overlay" class="hidden fixed inset-0 bg-black/20 z-30" onclick="closePanel()"></div>
+
+<!-- ═══ SYNC MODAL ═══ -->
+<div id="sync-modal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100 flex-shrink-0">
+      <div>
+        <h2 class="font-semibold">Mes événements Luma</h2>
+        <p class="text-xs text-gray-400 mt-0.5" id="sync-subtitle">Chargement…</p>
+      </div>
+      <button onclick="closeSyncModal()" class="text-gray-400 hover:text-gray-600">✕</button>
+    </div>
+    <div class="flex-1 overflow-y-auto px-6 py-4" id="sync-list">
+      <div class="text-center text-gray-400 py-8 text-sm">Chargement des événements…</div>
+    </div>
+    <div class="px-6 py-4 border-t border-gray-100 flex items-center justify-between flex-shrink-0">
+      <button onclick="selectAllSyncEvents()" class="text-xs text-indigo-600 hover:underline">Tout sélectionner</button>
+      <button onclick="importSelectedSyncEvents()"
+        class="bg-indigo-600 hover:bg-indigo-700 text-white text-sm px-5 py-2 rounded-lg font-medium transition">
+        Importer la sélection
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ ADD EVENT MODAL ═══ -->
+<div id="add-event-modal" class="hidden fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+    <div class="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+      <h2 class="font-semibold">Ajouter un événement</h2>
+      <button onclick="closeAddEventModal()" class="text-gray-400 hover:text-gray-600">✕</button>
+    </div>
+
+    <div class="flex border-b border-gray-100 px-6">
+      <button onclick="setTab('luma')" id="tab-luma"
+        class="py-3 px-4 text-sm font-medium border-b-2 border-indigo-600 text-indigo-600 -mb-px">
+        Luma (auto)
+      </button>
+      <button onclick="setTab('manual')" id="tab-manual"
+        class="py-3 px-4 text-sm font-medium border-b-2 border-transparent text-gray-500 -mb-px">
+        Manuel
+      </button>
+    </div>
+
+    <!-- Luma form -->
+    <div id="form-luma" class="p-6 space-y-4">
+      <!-- Connected -->
+      <div id="luma-connected-block" class="hidden space-y-4">
+        <div class="flex items-center gap-2 bg-green-50 border border-green-200 rounded-lg px-3 py-2">
+          <span class="text-green-600 text-sm">✓</span>
+          <span class="text-sm text-green-700 font-medium flex-1">Compte Luma connecté</span>
+          <button onclick="disconnectLuma()" class="text-xs text-gray-400 hover:text-red-500 transition">Déconnecter</button>
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1">URL de l'événement Luma</label>
+          <input id="luma-url-connected" type="url" placeholder="https://lu.ma/etccannes  ou  https://luma.com/xxxxxxxx"
+            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+        </div>
+        <button onclick="importFromLuma()"
+          class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-lg text-sm font-medium transition">
+          Importer les participants
+        </button>
+      </div>
+
+      <!-- Not connected -->
+      <div id="luma-disconnected-block" class="space-y-4">
+        <div class="bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5 text-xs text-amber-800">
+          Connecte ton compte Luma une seule fois — les prochains imports se feront avec l'URL uniquement.
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1">URL de l'événement Luma</label>
+          <input id="luma-url-disconnected" type="url" placeholder="https://lu.ma/etccannes  ou  https://luma.com/xxxxxxxx"
+            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+        </div>
+        <div>
+          <label class="block text-xs font-medium text-gray-600 mb-1">Token d'authentification Luma</label>
+          <textarea id="luma-token-input" rows="2" placeholder="luma.auth-session-key=usr-xxx.yyy; luma.did=zzz"
+            class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300 resize-none font-mono"></textarea>
+          <details class="mt-1">
+            <summary class="text-xs text-indigo-600 cursor-pointer select-none">Comment obtenir le token ?</summary>
+            <div class="text-xs text-gray-500 mt-2 space-y-1 bg-gray-50 rounded p-3 leading-relaxed">
+              <p>1. Ouvre <strong>lu.ma</strong> dans Chrome et connecte-toi</p>
+              <p>2. F12 → onglet <strong>Network</strong> → filtre <strong>api.lu.ma</strong></p>
+              <p>3. Clique sur n'importe quelle requête → <strong>Request Headers</strong></p>
+              <p>4. Copie la valeur complète du champ <strong>Cookie</strong></p>
+              <p class="text-indigo-600 font-medium mt-2">→ Tu n'auras à faire ça qu'une seule fois.</p>
+            </div>
+          </details>
+        </div>
+        <button onclick="importFromLuma()"
+          class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-lg text-sm font-medium transition">
+          Connecter &amp; importer
+        </button>
+      </div>
+
+      <div id="luma-status" class="hidden text-sm text-center py-2 rounded-lg"></div>
+    </div>
+
+    <!-- Manual form -->
+    <div id="form-manual" class="hidden p-6 space-y-4">
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1">Nom de l'événement</label>
+        <input id="manual-name" type="text" placeholder="ETC Cannes 2025"
+          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1">URL (optionnel)</label>
+        <input id="manual-url" type="url" placeholder="https://lu.ma/..."
+          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+      </div>
+      <button onclick="createManualEvent()"
+        class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-lg text-sm font-medium transition">
+        Créer l'événement
+      </button>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ JS ═══ -->
+<script>
+const API = '';
+let currentEventId = null;
+let allParticipants = [];
+let enrichInterval = null;
+let currentSort = 'date_desc';
+let selectMode = false;
+let selectedEventIds = new Set();
+let lumaConnected = false;
+let cachedEvents = [];
+
+// ── Events ────────────────────────────────────────────────────────────────────
+
+async function loadEvents() {
+  const resp = await fetch(`${API}/api/events?sort=${currentSort}`);
+  cachedEvents = await resp.json();
+  renderEventList(cachedEvents);
+}
+
+function renderEventList(events) {
+  const list = document.getElementById('event-list');
+  if (!events.length) {
+    list.innerHTML = '<p class="text-xs text-gray-400 px-2 pt-2">Aucun événement</p>';
+    return;
+  }
+  list.innerHTML = events.map(e => {
+    const isSelected = selectedEventIds.has(e.id);
+    const isActive = currentEventId === e.id;
+    const baseClass = `sidebar-event rounded-lg px-3 py-2 mb-1 transition ${isActive ? 'active' : 'hover:bg-gray-50'} ${isSelected ? 'selected' : ''}`;
+    return `
+      <div class="${baseClass}" id="ev-${e.id}"
+        onclick="${selectMode ? `toggleEventSelection(${e.id})` : `selectEvent(${e.id}, '${escAttr(e.name)}', '${escAttr(e.date||'')}', '${escAttr(e.location||'')}')`}">
+        <div class="flex items-start gap-2">
+          ${selectMode ? `<input type="checkbox" class="mt-1 accent-indigo-600 flex-shrink-0 pointer-events-none" ${isSelected ? 'checked' : ''} />` : ''}
+          <div class="flex-1 min-w-0">
+            <div class="flex items-center justify-between gap-1">
+              <p class="text-sm font-medium text-gray-800 truncate">${escHtml(e.name)}</p>
+              ${!selectMode ? `<button onclick="event.stopPropagation(); deleteEvent(${e.id})"
+                class="text-gray-300 hover:text-red-400 text-xs leading-none flex-shrink-0">✕</button>` : ''}
+            </div>
+            <p class="text-xs text-gray-400 mt-0.5">${e.participant_count || 0} participants</p>
+            ${e.date ? `<p class="text-xs text-gray-400">${formatDate(e.date)}</p>` : ''}
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function selectEvent(id, name, date, location) {
+  if (selectMode) return;
+  currentEventId = id;
+  document.getElementById('toolbar').classList.remove('hidden');
+  document.getElementById('stats-bar').classList.remove('hidden');
+  document.getElementById('event-header').innerHTML = `
+    <h1 class="text-base font-semibold">${escHtml(name)}</h1>
+    <p class="text-xs text-gray-400">${location ? escHtml(location) + ' · ' : ''}${date ? formatDate(date) : ''}</p>`;
+  document.getElementById('search').value = '';
+  document.getElementById('priority-filter').value = '';
+  await loadParticipants();
+  renderEventList(cachedEvents);
+  startEnrichPolling();
+}
+
+async function deleteEvent(id) {
+  if (!confirm('Supprimer cet événement et tous ses participants ?')) return;
+  await fetch(`${API}/api/events/${id}`, { method: 'DELETE' });
+  if (currentEventId === id) {
+    currentEventId = null;
+    document.getElementById('toolbar').classList.add('hidden');
+    document.getElementById('stats-bar').classList.add('hidden');
+    document.getElementById('event-header').innerHTML =
+      '<h1 class="text-base font-semibold text-gray-700">Sélectionne un événement</h1>';
+    renderParticipants([]);
+  }
+  loadEvents();
+}
+
+// ── Select mode ───────────────────────────────────────────────────────────────
+
+function toggleSelectMode() {
+  selectMode = !selectMode;
+  selectedEventIds.clear();
+  document.getElementById('select-toggle-btn').textContent = selectMode ? 'Annuler' : 'Sélect.';
+  document.getElementById('select-toggle-btn').className = selectMode
+    ? 'text-xs text-red-500 hover:text-red-700 transition font-medium'
+    : 'text-xs text-gray-400 hover:text-indigo-600 transition';
+  document.getElementById('bulk-bar').classList.toggle('hidden', !selectMode);
+  updateBulkCount();
+  renderEventList(cachedEvents);
+}
+
+function toggleEventSelection(id) {
+  if (selectedEventIds.has(id)) selectedEventIds.delete(id);
+  else selectedEventIds.add(id);
+  updateBulkCount();
+  renderEventList(cachedEvents);
+}
+
+function selectAllEvents() {
+  cachedEvents.forEach(e => selectedEventIds.add(e.id));
+  updateBulkCount();
+  renderEventList(cachedEvents);
+}
+
+function updateBulkCount() {
+  document.getElementById('bulk-count').textContent = `${selectedEventIds.size} sélectionné(s)`;
+}
+
+async function deleteSelectedEvents() {
+  if (!selectedEventIds.size) return;
+  const n = selectedEventIds.size;
+  if (!confirm(`Supprimer ${n} événement(s) et tous leurs participants ?`)) return;
+  await Promise.all([...selectedEventIds].map(id =>
+    fetch(`${API}/api/events/${id}`, { method: 'DELETE' })
+  ));
+  if (currentEventId && selectedEventIds.has(currentEventId)) {
+    currentEventId = null;
+    document.getElementById('toolbar').classList.add('hidden');
+    document.getElementById('stats-bar').classList.add('hidden');
+    document.getElementById('event-header').innerHTML =
+      '<h1 class="text-base font-semibold text-gray-700">Sélectionne un événement</h1>';
+    renderParticipants([]);
+  }
+  toggleSelectMode();
+  loadEvents();
+}
+
+// ── Sort ──────────────────────────────────────────────────────────────────────
+
+function toggleSort() {
+  currentSort = currentSort === 'date_desc' ? 'date_asc' : 'date_desc';
+  document.getElementById('sort-icon').textContent = currentSort === 'date_desc' ? '↓' : '↑';
+  document.getElementById('sort-label').textContent = currentSort === 'date_desc' ? 'Récent' : 'Ancien';
+  loadEvents();
+}
+
+// ── Import ────────────────────────────────────────────────────────────────────
+
+async function importFromLuma() {
+  const urlConnected = document.getElementById('luma-url-connected');
+  const urlDisconnected = document.getElementById('luma-url-disconnected');
+  const url = (lumaConnected ? urlConnected : urlDisconnected)?.value.trim() || '';
+  const tokenEl = document.getElementById('luma-token-input');
+  const token = tokenEl ? tokenEl.value.trim() : '';
+  const status = document.getElementById('luma-status');
+
+  if (!url) { showStatus(status, 'Saisis l\'URL de l\'événement.', 'error'); return; }
+  if (!lumaConnected && !token) { showStatus(status, 'Saisis ton token Luma.', 'error'); return; }
+
+  showStatus(status, '⏳ Import en cours…', 'loading');
+  try {
+    if (token) {
+      const r = await fetch(`${API}/api/settings/luma-token`, {
+        method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({token}),
+      });
+      if (!r.ok) throw new Error('Impossible de sauvegarder le token');
+      lumaConnected = true;
+    }
+    const resp = await fetch(`${API}/api/events/import-luma`, {
+      method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({url}),
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.detail || 'Erreur inconnue');
+    showStatus(status, `✅ ${data.imported} participants importés !`, 'success');
+    checkLumaConnection();
+    setTimeout(() => {
+      closeAddEventModal();
+      loadEvents().then(() => selectEvent(data.event.id, data.event.name, data.event.date||'', data.event.location||''));
+    }, 1000);
+  } catch (err) {
+    showStatus(status, `❌ ${err.message}`, 'error');
+  }
+}
+
+async function createManualEvent() {
+  const name = document.getElementById('manual-name').value.trim();
+  const url  = document.getElementById('manual-url').value.trim();
+  if (!name) return;
+  const form = new FormData(); form.append('name', name); form.append('url', url);
+  const resp = await fetch(`${API}/api/events/create-manual`, {method:'POST', body:form});
+  const event = await resp.json();
+  closeAddEventModal();
+  await loadEvents();
+  selectEvent(event.id, event.name, event.date||'', event.location||'');
+}
+
+async function importCSV(evt) {
+  if (!currentEventId) return;
+  const file = evt.target.files[0]; if (!file) return;
+  const form = new FormData(); form.append('file', file);
+  const resp = await fetch(`${API}/api/events/${currentEventId}/import-csv`, {method:'POST', body:form});
+  const data = await resp.json();
+  alert(`${data.imported} participants importés depuis le CSV.`);
+  loadParticipants(); loadEvents();
+}
+
+// ── Participants ──────────────────────────────────────────────────────────────
+
+async function loadParticipants() {
+  if (!currentEventId) return;
+  const search   = document.getElementById('search')?.value || '';
+  const priority = document.getElementById('priority-filter')?.value || '';
+  const params   = new URLSearchParams();
+  if (search)   params.set('search', search);
+  if (priority) params.set('priority', priority);
+  const resp = await fetch(`${API}/api/events/${currentEventId}/participants?${params}`);
+  allParticipants = await resp.json();
+  renderParticipants(allParticipants);
+  updateStats(allParticipants);
+}
+
+function filterParticipants() { loadParticipants(); }
+
+function renderParticipants(list) {
+  const area = document.getElementById('table-area');
+  if (!list.length) {
+    area.innerHTML = `<div class="text-center text-gray-400 mt-20">
+      <p class="text-sm">Aucun participant trouvé</p>
+      <p class="text-xs mt-1">Importe depuis Luma ou ajoute un CSV</p></div>`;
+    return;
+  }
+  area.innerHTML = `
+    <table class="w-full text-sm border-collapse">
+      <thead>
+        <tr class="border-b border-gray-200 bg-white sticky top-0 z-10">
+          <th class="text-left py-3 px-3 text-xs font-semibold text-gray-500 w-8">#</th>
+          <th class="text-left py-3 px-3 text-xs font-semibold text-gray-500">Participant</th>
+          <th class="text-left py-3 px-3 text-xs font-semibold text-gray-500">Société</th>
+          <th class="text-left py-3 px-3 text-xs font-semibold text-gray-500">Poste</th>
+          <th class="text-left py-3 px-3 text-xs font-semibold text-gray-500 w-28">Score</th>
+          <th class="text-left py-3 px-3 text-xs font-semibold text-gray-500 w-28">Priorité</th>
+          <th class="text-left py-3 px-3 text-xs font-semibold text-gray-500 w-28">Contacts</th>
+          <th class="text-left py-3 px-3 text-xs font-semibold text-gray-500 w-16">Actions</th>
+        </tr>
+      </thead>
+      <tbody>${list.map((p, i) => participantRow(p, i)).join('')}</tbody>
+    </table>`;
+}
+
+function participantRow(p, i) {
+  const sc = p.score >= 70 ? 'high' : p.score >= 40 ? 'medium' : 'low';
+  const lc = {'Haute priorité':'score-high','Priorité moyenne':'score-medium','Faible priorité':'score-low'}[p.score_label]||'score-low';
+  const avatar = p.avatar_url
+    ? `<img src="${escHtml(p.avatar_url)}" class="w-7 h-7 rounded-full object-cover flex-shrink-0" onerror="this.replaceWith(initialsEl('${escAttr(p.name)}'))" />`
+    : initialsHtml(p.name);
+  const contacts = buildContactBadges(p, 'table');
+  const enrichBtn = p.enriched
+    ? `<span class="text-xs text-gray-400">✓</span>`
+    : p.enriching
+    ? `<span class="text-xs text-indigo-500 spinning inline-block">◌</span>`
+    : `<button onclick="enrichOne(${p.id})" class="text-xs text-indigo-500 hover:text-indigo-700">✨</button>`;
+  return `
+    <tr class="border-b border-gray-100 cursor-pointer" onclick="openPanel(${p.id})">
+      <td class="py-2.5 px-3 text-gray-400 text-xs">${i+1}</td>
+      <td class="py-2.5 px-3"><div class="flex items-center gap-2">${avatar}<span class="font-medium truncate max-w-[120px]">${escHtml(p.name)}</span></div></td>
+      <td class="py-2.5 px-3 text-gray-600 truncate max-w-[130px]">${escHtml(p.company||'—')}</td>
+      <td class="py-2.5 px-3 text-gray-500 truncate max-w-[140px]">${escHtml(p.job_title||'—')}</td>
+      <td class="py-2.5 px-3">
+        <div class="flex items-center gap-1.5">
+          <span class="text-xs font-bold w-6">${Math.round(p.score)}</span>
+          <div class="score-bar flex-1"><div class="score-fill-${sc} h-full rounded-full" style="width:${p.score}%"></div></div>
+        </div>
+      </td>
+      <td class="py-2.5 px-3"><span class="tag ${lc}">${escHtml(p.score_label||'—')}</span></td>
+      <td class="py-2.5 px-3 text-sm font-medium space-x-1">${contacts}</td>
+      <td class="py-2.5 px-3" onclick="event.stopPropagation()">${enrichBtn}</td>
+    </tr>`;
+}
+
+function updateStats(list) {
+  const high = list.filter(p => p.score_label === 'Haute priorité').length;
+  const medium = list.filter(p => p.score_label === 'Priorité moyenne').length;
+  const enriched = list.filter(p => p.enriched).length;
+  document.getElementById('stat-total').textContent = `${list.length} participants`;
+  document.getElementById('stat-high').textContent = `${high} haute priorité`;
+  document.getElementById('stat-medium').textContent = `${medium} priorité moyenne`;
+  document.getElementById('stat-enriched').textContent = `${enriched} enrichis`;
+}
+
+// ── Enrichment ────────────────────────────────────────────────────────────────
+
+async function enrichOne(id) {
+  await fetch(`${API}/api/participants/${id}/enrich`, {method:'POST'});
+  loadParticipants();
+}
+
+async function enrichAll() {
+  if (!currentEventId) return;
+  if (!confirm('Enrichir tous les participants non enrichis ? Cela peut prendre plusieurs minutes.')) return;
+  await fetch(`${API}/api/events/${currentEventId}/enrich-all`, {method:'POST'});
+  startEnrichPolling();
+}
+
+function startEnrichPolling() {
+  if (enrichInterval) clearInterval(enrichInterval);
+  enrichInterval = setInterval(async () => {
+    const wasEnriching = allParticipants.some(p => p.enriching);
+    await loadParticipants();
+    if (!allParticipants.some(p => p.enriching) && !wasEnriching) {
+      clearInterval(enrichInterval); enrichInterval = null;
+    }
+  }, 3000);
+}
+
+// ── Detail panel ──────────────────────────────────────────────────────────────
+
+async function openPanel(id) {
+  const resp = await fetch(`${API}/api/participants/${id}`);
+  const p = await resp.json();
+  const sc = p.score >= 70 ? 'high' : p.score >= 40 ? 'medium' : 'low';
+  const lc = {'Haute priorité':'score-high','Priorité moyenne':'score-medium','Faible priorité':'score-low'}[p.score_label]||'score-low';
+  const avatar = p.avatar_url
+    ? `<img src="${escHtml(p.avatar_url)}" class="w-16 h-16 rounded-full object-cover" />`
+    : `<div class="w-16 h-16 rounded-full bg-indigo-100 flex items-center justify-center text-xl font-bold text-indigo-600">${nameInitials(p.name)}</div>`;
+  const links = buildContactBadges(p, 'panel');
+  document.getElementById('panel-content').innerHTML = `
+    <div class="flex items-start gap-4 mb-4">
+      ${avatar}
+      <div class="flex-1 min-w-0">
+        <h2 class="font-semibold text-base leading-tight">${escHtml(p.name)}</h2>
+        ${p.job_title ? `<p class="text-sm text-gray-600 mt-0.5">${escHtml(p.job_title)}</p>` : ''}
+        ${p.company ? `<p class="text-sm font-medium text-indigo-600 mt-0.5">${escHtml(p.company)}</p>` : ''}
+        ${p.location ? `<p class="text-xs text-gray-400 mt-1">📍 ${escHtml(p.location)}</p>` : ''}
+      </div>
+    </div>
+    <div class="bg-gray-50 rounded-xl p-3 mb-4">
+      <div class="flex items-center justify-between mb-2">
+        <span class="text-xs font-semibold text-gray-500">Score de pertinence</span>
+        <span class="tag ${lc}">${escHtml(p.score_label||'—')}</span>
+      </div>
+      <div class="flex items-center gap-2">
+        <span class="text-2xl font-bold">${Math.round(p.score)}</span>
+        <div class="flex-1 score-bar"><div class="score-fill-${sc} h-full rounded-full" style="width:${p.score}%"></div></div>
+        <span class="text-xs text-gray-400">/ 100</span>
+      </div>
+      ${p.score_reason ? `<p class="text-xs text-gray-500 mt-1.5">${escHtml(p.score_reason)}</p>` : ''}
+    </div>
+    ${links ? `<div class="flex flex-wrap gap-2 mb-4">${links}</div>` : ''}
+    ${p.bio ? `<div class="mb-4"><p class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Bio</p><p class="text-sm text-gray-700 leading-relaxed">${escHtml(p.bio)}</p></div>` : ''}
+    ${p.company_description ? `<div class="mb-4"><p class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">À propos de ${escHtml(p.company||'la société')}</p><p class="text-sm text-gray-600 leading-relaxed">${escHtml(p.company_description)}</p></div>` : ''}
+    ${!p.enriched ? `<button onclick="enrichOne(${p.id}); closePanel()"
+      class="w-full text-sm bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 py-2 rounded-lg font-medium transition">
+      ✨ Enrichir ce profil</button>` : `<p class="text-xs text-center text-gray-400">✓ Profil enrichi</p>`}`;
+  document.getElementById('detail-panel').classList.remove('hidden');
+  document.getElementById('panel-overlay').classList.remove('hidden');
+}
+
+function closePanel() {
+  document.getElementById('detail-panel').classList.add('hidden');
+  document.getElementById('panel-overlay').classList.add('hidden');
+}
+
+// ── Luma connection ───────────────────────────────────────────────────────────
+
+let syncEvents = [];
+
+async function checkLumaConnection() {
+  const resp = await fetch(`${API}/api/settings/luma-token`);
+  const data = await resp.json();
+  lumaConnected = data.connected;
+  const badge = document.getElementById('luma-status-badge');
+  const syncBtn = document.getElementById('sync-btn');
+  if (lumaConnected) {
+    badge.classList.remove('hidden');
+    badge.className = 'text-xs text-center py-1.5 rounded-lg bg-green-50 text-green-700';
+    badge.textContent = '✓ Luma connecté';
+    syncBtn.classList.remove('hidden');
+  } else {
+    badge.classList.add('hidden');
+    syncBtn.classList.add('hidden');
+  }
+}
+
+async function disconnectLuma() {
+  await fetch(`${API}/api/settings/luma-token`, {method:'DELETE'});
+  lumaConnected = false;
+  _refreshLumaModal();
+  checkLumaConnection();
+}
+
+// ── Sync my events ────────────────────────────────────────────────────────────
+
+async function syncMyEvents() {
+  document.getElementById('sync-modal').classList.remove('hidden');
+  document.getElementById('sync-list').innerHTML =
+    '<div class="text-center text-gray-400 py-8 text-sm">Chargement…</div>';
+  document.getElementById('sync-subtitle').textContent = 'Chargement…';
+  try {
+    const resp = await fetch(`${API}/api/luma/my-events`);
+    const data = await resp.json();
+    if (!resp.ok) { renderSyncNoIds(); return; }
+    syncEvents = data.events || [];
+    renderSyncList(syncEvents);
+  } catch (err) {
+    document.getElementById('sync-list').innerHTML =
+      `<div class="text-center text-red-500 py-8 text-sm">❌ ${escHtml(err.message)}</div>`;
+  }
+}
+
+function renderSyncNoIds() {
+  document.getElementById('sync-subtitle').textContent = 'Token incomplet';
+  document.getElementById('sync-list').innerHTML = `
+    <div class="text-sm text-gray-600 space-y-3 py-2">
+      <p class="font-medium text-amber-700">⚠️ Ton token ne contient pas la liste d'événements.</p>
+      <p>Sauvegarde ton cookie <strong>complet</strong> depuis les DevTools (champ <code class="bg-gray-100 px-1 rounded">Cookie</code> dans les Request Headers de api.lu.ma).</p>
+      <button onclick="closeSyncModal(); disconnectLuma(); openAddEventModal()"
+        class="w-full bg-indigo-600 text-white text-sm py-2 rounded-lg font-medium hover:bg-indigo-700 transition">
+        Mettre à jour le cookie
+      </button>
+    </div>`;
+}
+
+function renderSyncList(events) {
+  const now = new Date();
+  const future = events.filter(e => e.date && new Date(e.date) >= now);
+  const past   = events.filter(e => !e.date || new Date(e.date) < now);
+  const notImported = events.filter(e => !e.already_imported).length;
+  document.getElementById('sync-subtitle').textContent =
+    `${events.length} confirmés · ${notImported} non importés`;
+
+  const renderGroup = (label, list) => !list.length ? '' : `
+    <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-2 mt-4">${label}</p>
+    ${list.map(e => `
+      <label class="flex items-start gap-3 py-2.5 border-b border-gray-50 cursor-pointer hover:bg-gray-50 rounded-lg px-2 -mx-2 ${e.already_imported?'opacity-50':''}">
+        <input type="checkbox" class="sync-checkbox mt-0.5 accent-indigo-600 flex-shrink-0"
+          data-luma-id="${escAttr(e.luma_id)}" data-url="${escAttr(e.luma_url||'')}"
+          ${e.already_imported ? 'disabled checked' : ''} />
+        <div class="flex-1 min-w-0">
+          <p class="text-sm font-medium leading-tight">${escHtml(e.name)}</p>
+          <p class="text-xs text-gray-400 mt-0.5">
+            ${e.date ? formatDate(e.date) : ''}${e.location ? ' · '+escHtml(e.location.split(',')[0]) : ''}
+            ${e.guest_count ? ` · ${e.guest_count} participants` : ''}
+          </p>
+        </div>
+        ${e.already_imported ? '<span class="text-xs text-green-600 flex-shrink-0">✓</span>' : ''}
+      </label>`).join('')}`;
+
+  document.getElementById('sync-list').innerHTML =
+    renderGroup('À venir', future) + renderGroup('Passés', past) ||
+    '<div class="text-center text-gray-400 py-8 text-sm">Aucun événement trouvé</div>';
+}
+
+function selectAllSyncEvents() {
+  document.querySelectorAll('.sync-checkbox:not(:disabled)').forEach(cb => cb.checked = true);
+}
+
+async function importSelectedSyncEvents() {
+  const selected = [...document.querySelectorAll('.sync-checkbox:checked:not(:disabled)')]
+    .map(cb => ({ luma_id: cb.dataset.lumaId, url: cb.dataset.url }));
+  if (!selected.length) { alert('Aucun événement sélectionné.'); return; }
+  const btn = document.querySelector('#sync-modal button[onclick="importSelectedSyncEvents()"]');
+  btn.textContent = `0/${selected.length}…`; btn.disabled = true;
+  let done = 0;
+  for (const {luma_id, url} of selected) {
+    const importUrl = url || `https://lu.ma/${luma_id}`;
+    try {
+      await fetch(`${API}/api/events/import-luma`, {
+        method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({url:importUrl}),
+      });
+    } catch {}
+    done++;
+    btn.textContent = `${done}/${selected.length}…`;
+  }
+  btn.textContent = 'Importer la sélection'; btn.disabled = false;
+  closeSyncModal();
+  await loadEvents();
+}
+
+function closeSyncModal() {
+  document.getElementById('sync-modal').classList.add('hidden');
+}
+
+// ── Modal helpers ─────────────────────────────────────────────────────────────
+
+function openAddEventModal() {
+  document.getElementById('add-event-modal').classList.remove('hidden');
+  setTab('luma');
+  _refreshLumaModal();
+}
+
+function _refreshLumaModal() {
+  document.getElementById('luma-connected-block').classList.toggle('hidden', !lumaConnected);
+  document.getElementById('luma-disconnected-block').classList.toggle('hidden', lumaConnected);
+  document.getElementById('luma-url-connected').value = '';
+  document.getElementById('luma-url-disconnected').value = '';
+}
+
+function closeAddEventModal() {
+  document.getElementById('add-event-modal').classList.add('hidden');
+  document.getElementById('luma-status').classList.add('hidden');
+}
+
+function setTab(tab) {
+  document.getElementById('form-luma').classList.toggle('hidden', tab !== 'luma');
+  document.getElementById('form-manual').classList.toggle('hidden', tab !== 'manual');
+  const active = 'py-3 px-4 text-sm font-medium border-b-2 border-indigo-600 text-indigo-600 -mb-px';
+  const inactive = 'py-3 px-4 text-sm font-medium border-b-2 border-transparent text-gray-500 -mb-px';
+  document.getElementById('tab-luma').className = tab==='luma' ? active : inactive;
+  document.getElementById('tab-manual').className = tab==='manual' ? active : inactive;
+}
+
+function showStatus(el, msg, type) {
+  el.classList.remove('hidden');
+  el.className = `text-sm text-center py-2 rounded-lg ${
+    type==='error' ? 'bg-red-50 text-red-600' :
+    type==='success' ? 'bg-green-50 text-green-600' : 'bg-indigo-50 text-indigo-600'}`;
+  el.textContent = msg;
+}
+
+// ── Contact badges ────────────────────────────────────────────────────────────
+
+function buildContactBadges(p, mode) {
+  const h = v => v ? v.replace('@','') : '';
+  const defs = [
+    { key:'linkedin_url',     label:'LinkedIn',   url:v=>v,                                    ts:'text-blue-600 hover:text-blue-800 text-xs font-semibold', tt:'in',  ps:'bg-blue-50 text-blue-700 border-blue-200 hover:bg-blue-100' },
+    { key:'twitter_handle',   label:'Twitter',    url:v=>`https://twitter.com/${h(v)}`,         ts:'text-sky-500 hover:text-sky-700 text-xs',                tt:'𝕏',   ps:'bg-sky-50 text-sky-700 border-sky-200 hover:bg-sky-100' },
+    { key:'instagram_handle', label:'Instagram',  url:v=>`https://instagram.com/${h(v)}`,       ts:'text-pink-500 hover:text-pink-700 text-xs',              tt:'◎',   ps:'bg-pink-50 text-pink-700 border-pink-200 hover:bg-pink-100' },
+    { key:'telegram_handle',  label:'Telegram',   url:v=>`https://t.me/${h(v)}`,                ts:'text-indigo-500 hover:text-indigo-700 text-xs',          tt:'✈',   ps:'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100' },
+    { key:'tiktok_handle',    label:'TikTok',     url:v=>`https://tiktok.com/@${h(v)}`,         ts:'text-gray-700 hover:text-black text-xs',                 tt:'♪',   ps:'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100' },
+    { key:'youtube_handle',   label:'YouTube',    url:v=>`https://youtube.com/@${h(v)}`,        ts:'text-red-500 hover:text-red-700 text-xs',                tt:'▶',   ps:'bg-red-50 text-red-700 border-red-200 hover:bg-red-100' },
+    { key:'website',          label:'Site web',   url:v=>v.startsWith('http')?v:`https://${v}`, ts:'text-gray-500 hover:text-gray-700 text-xs',              tt:'🌐',  ps:'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100' },
+    { key:'email', label:'Email', url:v=>`mailto:${v}`, panelOnly:true, ps:'bg-gray-50 text-gray-700 border-gray-200 hover:bg-gray-100' },
+  ];
+  if (mode === 'table') {
+    const items = defs.filter(d => !d.panelOnly && p[d.key])
+      .map(d => `<a href="${escHtml(d.url(p[d.key]))}" target="_blank" title="${d.label}" class="${d.ts}" onclick="event.stopPropagation()">${d.tt}</a>`);
+    return items.join(' ') || '<span class="text-gray-300">—</span>';
+  }
+  return defs.filter(d => p[d.key])
+    .map(d => `<a href="${escHtml(d.url(p[d.key]))}" target="_blank"
+      class="inline-flex items-center gap-1 text-xs border px-2.5 py-1 rounded-full ${d.ps}">${d.label}</a>`)
+    .join('');
+}
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function escHtml(s) {
+  if (!s) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#039;');
+}
+function escAttr(s) {
+  if (!s) return '';
+  return String(s).replace(/'/g,"\\'").replace(/"/g,'&quot;');
+}
+function nameInitials(n) {
+  if (!n) return '?';
+  return n.split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
+}
+function initialsHtml(name) {
+  const colors = ['bg-indigo-100 text-indigo-600','bg-violet-100 text-violet-600','bg-blue-100 text-blue-600','bg-teal-100 text-teal-600','bg-orange-100 text-orange-600'];
+  const c = colors[(name||'').charCodeAt(0)%colors.length];
+  return `<div class="w-7 h-7 rounded-full ${c} flex items-center justify-center text-xs font-bold flex-shrink-0">${nameInitials(name)}</div>`;
+}
+function initialsEl(name) {
+  const d = document.createElement('div');
+  d.innerHTML = initialsHtml(name);
+  return d.firstElementChild;
+}
+function formatDate(s) {
+  if (!s) return '';
+  try { return new Date(s).toLocaleDateString('fr-FR',{day:'numeric',month:'short',year:'numeric'}); }
+  catch { return s; }
+}
+
+// ── Init ──────────────────────────────────────────────────────────────────────
+loadEvents();
+checkLumaConnection();
+</script>
+</body>
+</html>
