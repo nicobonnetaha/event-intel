@@ -104,6 +104,43 @@ def list_workspaces(db: Session = Depends(get_db)):
     return [{"id": w.id, "name": w.name, "has_pin": bool(w.pin)} for w in workspaces]
 
 
+@app.patch("/api/workspaces/{workspace_id}")
+def rename_workspace(workspace_id: int, payload: dict, db: Session = Depends(get_db)):
+    ws = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace introuvable")
+    new_name = (payload.get("name") or "").strip()
+    new_pin  = payload.get("pin")   # None = don't change, "" = remove pin
+    if new_name:
+        existing = db.query(Workspace).filter(
+            Workspace.name.ilike(new_name), Workspace.id != workspace_id
+        ).first()
+        if existing:
+            raise HTTPException(status_code=400, detail="Ce nom est déjà pris")
+        ws.name = new_name
+    if new_pin is not None:
+        ws.pin = new_pin.strip() or None
+    db.commit()
+    return {"id": ws.id, "name": ws.name, "has_pin": bool(ws.pin)}
+
+
+@app.delete("/api/workspaces/{workspace_id}")
+def delete_workspace(workspace_id: int, db: Session = Depends(get_db)):
+    ws = db.query(Workspace).filter(Workspace.id == workspace_id).first()
+    if not ws:
+        raise HTTPException(status_code=404, detail="Workspace introuvable")
+    # Delete all events + participants in this workspace
+    events = db.query(Event).filter(Event.workspace_id == workspace_id).all()
+    for e in events:
+        db.query(Participant).filter(Participant.event_id == e.id).delete()
+    db.query(Event).filter(Event.workspace_id == workspace_id).delete()
+    # Delete workspace settings
+    db.query(Setting).filter(Setting.key.like(f"ws_{workspace_id}:%")).delete(synchronize_session=False)
+    db.delete(ws)
+    db.commit()
+    return {"ok": True}
+
+
 # ── Settings ──────────────────────────────────────────────────────────────────
 
 @app.get("/api/settings/luma-token")
