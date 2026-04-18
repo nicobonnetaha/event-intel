@@ -193,6 +193,94 @@ async def get_my_luma_events(
     return {"events": future + past}
 
 
+# ── Dashboard ─────────────────────────────────────────────────────────────────
+
+@app.get("/api/dashboard")
+def get_dashboard(
+    workspace_id: Optional[int] = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    from datetime import datetime, timezone
+
+    events_q = db.query(Event)
+    if workspace_id:
+        events_q = events_q.filter(Event.workspace_id == workspace_id)
+    events = events_q.all()
+    event_ids = [e.id for e in events]
+
+    participants = (
+        db.query(Participant).filter(Participant.event_id.in_(event_ids)).all()
+        if event_ids else []
+    )
+
+    # ── Stats ──
+    high   = sum(1 for p in participants if p.score_label == "Haute priorité")
+    medium = sum(1 for p in participants if p.score_label == "Priorité moyenne")
+    low    = sum(1 for p in participants if p.score_label == "Faible priorité")
+
+    # ── Upcoming events (sorted by date asc, future only) ──
+    now = datetime.now(timezone.utc)
+    def _dt(e):
+        try:
+            return datetime.fromisoformat(e.date.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    upcoming = sorted(
+        [e for e in events if _dt(e) and _dt(e) >= now],
+        key=lambda e: _dt(e)
+    )[:5]
+
+    # Count high-priority per event
+    from collections import defaultdict
+    hp_by_event = defaultdict(int)
+    for p in participants:
+        if p.score_label == "Haute priorité":
+            hp_by_event[p.event_id] += 1
+
+    upcoming_out = []
+    for e in upcoming:
+        upcoming_out.append({
+            "id": e.id,
+            "name": e.name,
+            "date": e.date,
+            "location": e.location,
+            "participant_count": e.participant_count or 0,
+            "high_priority_count": hp_by_event[e.id],
+        })
+
+    # ── Top contacts (top 8 by score across all events) ──
+    event_name_map = {e.id: e.name for e in events}
+    top = sorted(participants, key=lambda p: p.score or 0, reverse=True)[:8]
+    top_out = []
+    for p in top:
+        top_out.append({
+            "id": p.id,
+            "name": p.name,
+            "company": p.company,
+            "job_title": p.job_title,
+            "score": p.score,
+            "score_label": p.score_label,
+            "avatar_url": p.avatar_url,
+            "linkedin_url": p.linkedin_url,
+            "event_id": p.event_id,
+            "event_name": event_name_map.get(p.event_id, ""),
+        })
+
+    return {
+        "stats": {
+            "total_events": len(events),
+            "total_participants": len(participants),
+            "high_priority": high,
+            "medium_priority": medium,
+            "low_priority": low,
+            "enriched": sum(1 for p in participants if p.enriched),
+        },
+        "upcoming_events": upcoming_out,
+        "top_contacts": top_out,
+    }
+
+
 # ── Frontend ──────────────────────────────────────────────────────────────────
 
 @app.get("/")
