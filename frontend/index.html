@@ -75,8 +75,8 @@
 </div>
 
 <!-- ═══ WORKSPACE SETTINGS MODAL ═══ -->
-<div id="ws-settings-modal" class="hidden fixed inset-0 bg-black/40 z-[150] flex items-center justify-center p-4">
-  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+<div id="ws-settings-modal" class="hidden fixed inset-0 bg-black/40 z-[150] flex items-center justify-center p-4" onclick="closeWsSettings()">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6" onclick="event.stopPropagation()">
     <div class="flex items-center justify-between mb-5">
       <h2 class="font-semibold">Gérer l'espace</h2>
       <button onclick="closeWsSettings()" class="text-gray-400 hover:text-gray-600">✕</button>
@@ -513,7 +513,17 @@ async function deleteCurrentWorkspace() {
       return;
     }
     closeWsSettings();
-    switchWorkspace();
+    // Reset state and go back to workspace picker (no extra confirm needed)
+    localStorage.removeItem('workspace');
+    currentWorkspace = null;
+    currentEventId = null;
+    allParticipants = [];
+    cachedEvents = [];
+    document.getElementById('workspace-screen').classList.remove('hidden');
+    document.getElementById('ws-pin').value = '';
+    document.getElementById('ws-name').value = '';
+    document.getElementById('ws-error').classList.add('hidden');
+    initWorkspace();
   } catch (e) {
     alert('Erreur réseau.');
   }
