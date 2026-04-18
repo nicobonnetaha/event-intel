@@ -26,13 +26,20 @@
 </head>
 <body class="bg-gray-50 text-gray-900 h-screen flex overflow-hidden">
 
-<!-- ═══ WORKSPACE MODAL (full screen, shown on first visit) ═══ -->
-<div id="workspace-screen" class="fixed inset-0 bg-gradient-to-br from-indigo-50 to-white z-[200] flex items-center justify-center p-4">
+<!-- ═══ WORKSPACE SCREEN ═══ -->
+<div id="workspace-screen" class="fixed inset-0 bg-gradient-to-br from-gray-950 to-gray-800 z-[200] flex items-center justify-center p-4">
   <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-8">
     <div class="text-center mb-8">
-      <div class="w-14 h-14 bg-black rounded-2xl flex items-center justify-center text-white font-bold text-xl mx-auto mb-4">Aha</div>
+      <!-- Aha Company logo -->
+      <div class="mx-auto mb-4 flex items-center justify-center">
+        <svg width="72" height="40" viewBox="0 0 120 56" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect width="120" height="56" rx="6" fill="#111"/>
+          <text x="10" y="36" font-family="Georgia,serif" font-style="italic" font-weight="700" font-size="28" fill="white">Aha</text>
+          <text x="10" y="50" font-family="Arial,sans-serif" font-weight="600" font-size="8.5" letter-spacing="2" fill="#aaa">THE AHA COMPANY</text>
+        </svg>
+      </div>
       <h1 class="text-2xl font-bold tracking-tight">Event Intel</h1>
-      <p class="text-sm text-gray-400 mt-1">The Aha Company</p>
+      <p class="text-sm text-gray-400 mt-1">Prépare tes événements</p>
     </div>
 
     <!-- Existing workspaces -->
@@ -53,16 +60,47 @@
           onkeydown="if(event.key==='Enter') joinWorkspace()" />
       </div>
       <div>
-        <label class="block text-xs font-medium text-gray-600 mb-1">PIN <span class="text-gray-400 font-normal">(optionnel — protège ton espace)</span></label>
+        <label class="block text-xs font-medium text-gray-600 mb-1">PIN <span class="text-gray-400 font-normal">(optionnel)</span></label>
         <input id="ws-pin" type="password" placeholder="••••"
           class="w-full border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300"
           onkeydown="if(event.key==='Enter') joinWorkspace()" />
       </div>
       <button onclick="joinWorkspace()"
-        class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-xl text-sm font-medium transition mt-1">
+        class="w-full bg-gray-900 hover:bg-gray-800 text-white py-2.5 rounded-xl text-sm font-medium transition mt-1">
         Accéder →
       </button>
       <p id="ws-error" class="hidden text-xs text-red-500 text-center pt-1"></p>
+    </div>
+  </div>
+</div>
+
+<!-- ═══ WORKSPACE SETTINGS MODAL ═══ -->
+<div id="ws-settings-modal" class="hidden fixed inset-0 bg-black/40 z-[150] flex items-center justify-center p-4">
+  <div class="bg-white rounded-2xl shadow-2xl w-full max-w-sm p-6">
+    <div class="flex items-center justify-between mb-5">
+      <h2 class="font-semibold">Gérer l'espace</h2>
+      <button onclick="closeWsSettings()" class="text-gray-400 hover:text-gray-600">✕</button>
+    </div>
+    <div class="space-y-3">
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1">Nom</label>
+        <input id="ws-edit-name" type="text"
+          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+      </div>
+      <div>
+        <label class="block text-xs font-medium text-gray-600 mb-1">Nouveau PIN <span class="text-gray-400 font-normal">(vide = supprimer le PIN)</span></label>
+        <input id="ws-edit-pin" type="password" placeholder="Laisser vide pour ne pas changer"
+          class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-300" />
+      </div>
+      <button onclick="saveWsSettings()"
+        class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg text-sm font-medium transition">
+        Enregistrer
+      </button>
+      <button onclick="deleteCurrentWorkspace()"
+        class="w-full bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 py-2 rounded-lg text-sm font-medium transition">
+        Supprimer cet espace…
+      </button>
+      <p id="ws-settings-error" class="hidden text-xs text-red-500 text-center"></p>
     </div>
   </div>
 </div>
@@ -73,11 +111,19 @@
   <div class="p-4 border-b border-gray-100">
     <div class="flex items-center justify-between mb-1">
       <div class="flex items-center gap-2">
-        <div class="w-7 h-7 bg-black rounded flex items-center justify-center text-white text-xs font-bold">Aha</div>
+        <svg width="36" height="20" viewBox="0 0 120 56" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect width="120" height="56" rx="6" fill="#111"/>
+          <text x="10" y="36" font-family="Georgia,serif" font-style="italic" font-weight="700" font-size="28" fill="white">Aha</text>
+          <text x="10" y="50" font-family="Arial,sans-serif" font-weight="600" font-size="8.5" letter-spacing="2" fill="#aaa">THE AHA COMPANY</text>
+        </svg>
         <span class="font-bold text-sm">Event Intel</span>
       </div>
-      <button onclick="switchWorkspace()" title="Changer d'espace"
-        class="text-gray-300 hover:text-indigo-500 transition text-base leading-none">⇄</button>
+      <div class="flex items-center gap-1.5">
+        <button onclick="openWsSettings()" title="Gérer l'espace"
+          class="text-gray-300 hover:text-indigo-500 transition text-sm leading-none">⚙</button>
+        <button onclick="switchWorkspace()" title="Changer d'espace"
+          class="text-gray-300 hover:text-indigo-500 transition text-base leading-none">⇄</button>
+      </div>
     </div>
     <p class="text-xs text-gray-400">
       <span id="ws-display-name" class="font-medium text-indigo-500"></span>
@@ -409,6 +455,68 @@ function switchWorkspace() {
   document.getElementById('ws-name').value = '';
   document.getElementById('ws-error').classList.add('hidden');
   initWorkspace();
+}
+
+function openWsSettings() {
+  if (!currentWorkspace) return;
+  document.getElementById('ws-edit-name').value = currentWorkspace.name || '';
+  document.getElementById('ws-edit-pin').value = '';
+  document.getElementById('ws-settings-error').classList.add('hidden');
+  document.getElementById('ws-settings-modal').classList.remove('hidden');
+}
+
+function closeWsSettings() {
+  document.getElementById('ws-settings-modal').classList.add('hidden');
+}
+
+async function saveWsSettings() {
+  const newName = document.getElementById('ws-edit-name').value.trim();
+  const newPin  = document.getElementById('ws-edit-pin').value;
+  const errEl   = document.getElementById('ws-settings-error');
+  errEl.classList.add('hidden');
+
+  if (!newName) { errEl.textContent = 'Le nom ne peut pas être vide.'; errEl.classList.remove('hidden'); return; }
+
+  try {
+    const resp = await apiFetch(`${API}/api/workspaces/${currentWorkspace.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: newName, pin: newPin || null })
+    });
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      errEl.textContent = data.detail || 'Erreur lors de la sauvegarde.';
+      errEl.classList.remove('hidden');
+      return;
+    }
+    const updated = await resp.json();
+    currentWorkspace = { id: updated.id, name: updated.name };
+    localStorage.setItem('workspace', JSON.stringify(currentWorkspace));
+    document.getElementById('ws-display-name').textContent = updated.name;
+    document.getElementById('event-header').innerHTML =
+      `<h1 class="text-base font-semibold text-gray-700">Bonjour ${escHtml(updated.name)} 👋</h1>`;
+    closeWsSettings();
+  } catch (e) {
+    errEl.textContent = 'Erreur réseau.';
+    errEl.classList.remove('hidden');
+  }
+}
+
+async function deleteCurrentWorkspace() {
+  if (!currentWorkspace) return;
+  if (!confirm(`Supprimer l'espace "${currentWorkspace.name}" et toutes ses données ? Cette action est irréversible.`)) return;
+  try {
+    const resp = await apiFetch(`${API}/api/workspaces/${currentWorkspace.id}`, { method: 'DELETE' });
+    if (!resp.ok) {
+      const data = await resp.json().catch(() => ({}));
+      alert(data.detail || 'Erreur lors de la suppression.');
+      return;
+    }
+    closeWsSettings();
+    switchWorkspace();
+  } catch (e) {
+    alert('Erreur réseau.');
+  }
 }
 
 function initApp() {
