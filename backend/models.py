@@ -5,16 +5,25 @@ from datetime import datetime
 Base = declarative_base()
 
 
+class Workspace(Base):
+    __tablename__ = "workspaces"
+    id = Column(Integer, primary_key=True)
+    name = Column(String, unique=True)   # prénom / slug, e.g. "Nicolas", "Enzo"
+    pin = Column(String, nullable=True)  # PIN optionnel (plaintext – outil interne)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class Setting(Base):
     __tablename__ = "settings"
-    key = Column(String, primary_key=True)
+    key = Column(String, primary_key=True)  # prefixed: "ws_{id}:{key}"
     value = Column(Text, nullable=True)
 
 
 class Event(Base):
     __tablename__ = "events"
     id = Column(Integer, primary_key=True)
-    luma_id = Column(String, unique=True, nullable=True)
+    workspace_id = Column(Integer, ForeignKey("workspaces.id"), nullable=True)
+    luma_id = Column(String, nullable=True)   # unique per workspace, checked in code
     name = Column(String)
     url = Column(String)
     date = Column(String, nullable=True)

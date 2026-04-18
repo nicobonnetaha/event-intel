@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, UploadFile, File, Form
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 sys.path.insert(0, os.path.dirname(__file__))
 
 from database import get_db, init_db
-from models import Event, Participant, Setting
+from models import Event, Participant, Setting, Workspace
 from scorer import score_participant
 from scrapers.luma import fetch_event_and_guests, fetch_event_metadata, extract_event_ids_from_cookie, parse_guest
 from scrapers.enricher import enrich_participant
@@ -46,7 +46,7 @@ app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="static")
 
 class EventCreate(BaseModel):
     url: str
-    auth_token: Optional[str] = None  # optional if already saved
+    auth_token: Optional[str] = None
 
 
 class ParticipantManual(BaseModel):
@@ -60,50 +60,107 @@ class ParticipantManual(BaseModel):
     bio: Optional[str] = None
 
 
-# ── Settings ─────────────────────────────────────────────────────────────────
+# ── Workspace helpers ─────────────────────────────────────────────────────────
+
+def _ws_key(workspace_id: int, key: str) -> str:
+    return f"ws_{workspace_id}:{key}"
+
+
+def get_workspace_id(x_workspace_id: Optional[str] = Header(None)) -> Optional[int]:
+    if not x_workspace_id:
+        return None
+    try:
+        return int(x_workspace_id)
+    except (ValueError, TypeError):
+        return None
+
+
+# ── Workspace endpoints ───────────────────────────────────────────────────────
+
+@app.post("/api/workspaces/auth")
+def workspace_auth(payload: dict, db: Session = Depends(get_db)):
+    """Create or join a workspace."""
+    name = (payload.get("name") or "").strip()
+    pin  = (payload.get("pin")  or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Nom requis")
+
+    ws = db.query(Workspace).filter(Workspace.name.ilike(name)).first()
+    if ws:
+        if ws.pin and ws.pin != pin:
+            raise HTTPException(status_code=401, detail="PIN incorrect")
+        return {"id": ws.id, "name": ws.name}
+    else:
+        ws = Workspace(name=name, pin=pin or None)
+        db.add(ws)
+        db.commit()
+        db.refresh(ws)
+        return {"id": ws.id, "name": ws.name}
+
+
+@app.get("/api/workspaces")
+def list_workspaces(db: Session = Depends(get_db)):
+    workspaces = db.query(Workspace).order_by(Workspace.name).all()
+    return [{"id": w.id, "name": w.name, "has_pin": bool(w.pin)} for w in workspaces]
+
+
+# ── Settings ──────────────────────────────────────────────────────────────────
 
 @app.get("/api/settings/luma-token")
-def get_luma_token(db: Session = Depends(get_db)):
-    row = db.query(Setting).filter(Setting.key == "luma_token").first()
+def get_luma_token(
+    workspace_id: Optional[int] = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    key = _ws_key(workspace_id, "luma_token") if workspace_id else "luma_token"
+    row = db.query(Setting).filter(Setting.key == key).first()
     return {"connected": bool(row and row.value)}
 
 
 @app.post("/api/settings/luma-token")
-def save_luma_token(payload: dict, db: Session = Depends(get_db)):
+def save_luma_token(
+    payload: dict,
+    workspace_id: Optional[int] = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
     token = (payload.get("token") or "").strip()
     if not token:
         raise HTTPException(status_code=400, detail="Token vide")
-    row = db.query(Setting).filter(Setting.key == "luma_token").first()
+    key = _ws_key(workspace_id, "luma_token") if workspace_id else "luma_token"
+    row = db.query(Setting).filter(Setting.key == key).first()
     if row:
         row.value = token
     else:
-        db.add(Setting(key="luma_token", value=token))
+        db.add(Setting(key=key, value=token))
     db.commit()
     return {"ok": True}
 
 
 @app.delete("/api/settings/luma-token")
-def delete_luma_token(db: Session = Depends(get_db)):
-    db.query(Setting).filter(Setting.key == "luma_token").delete()
+def delete_luma_token(
+    workspace_id: Optional[int] = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    key = _ws_key(workspace_id, "luma_token") if workspace_id else "luma_token"
+    db.query(Setting).filter(Setting.key == key).delete()
     db.commit()
     return {"ok": True}
 
 
 @app.get("/api/luma/my-events")
-async def get_my_luma_events(db: Session = Depends(get_db)):
-    """List all events found in the stored cookie + their metadata."""
-    row = db.query(Setting).filter(Setting.key == "luma_token").first()
+async def get_my_luma_events(
+    workspace_id: Optional[int] = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    key = _ws_key(workspace_id, "luma_token") if workspace_id else "luma_token"
+    row = db.query(Setting).filter(Setting.key == key).first()
     if not row or not row.value:
         raise HTTPException(status_code=400, detail="Token Luma non configuré")
 
     token = row.value
     event_ids = extract_event_ids_from_cookie(token)
-
     if not event_ids:
         return {"events": [], "hint": "no_ids_in_cookie"}
 
-    # Fetch metadata for all events concurrently (max 10 at a time)
-    import asyncio
     semaphore = asyncio.Semaphore(10)
 
     async def fetch_one(eid):
@@ -111,16 +168,17 @@ async def get_my_luma_events(db: Session = Depends(get_db)):
             meta = await fetch_event_metadata(eid, token)
             if not meta:
                 return None
-            # Mark if already imported
-            existing = db.query(Event).filter(Event.luma_id == meta["luma_id"]).first()
+            existing = db.query(Event).filter(
+                Event.luma_id == meta["luma_id"],
+                Event.workspace_id == workspace_id,
+            ).first()
             meta["already_imported"] = bool(existing)
             meta["luma_url"] = f"https://lu.ma/{meta['url']}" if meta.get("url") else ""
             return meta
 
     results = await asyncio.gather(*[fetch_one(eid) for eid in event_ids])
-    # Keep only confirmed registrations (approved = going)
     events = [r for r in results if r and r.get("approval_status") == "approved"]
-    # Sort: future first, then past descending
+
     from datetime import datetime, timezone
 
     def sort_key(e):
@@ -131,8 +189,7 @@ async def get_my_luma_events(db: Session = Depends(get_db)):
 
     now = datetime.now(timezone.utc)
     future = sorted([e for e in events if sort_key(e) >= now], key=sort_key)
-    past = sorted([e for e in events if sort_key(e) < now], key=sort_key, reverse=True)
-
+    past   = sorted([e for e in events if sort_key(e) <  now], key=sort_key, reverse=True)
     return {"events": future + past}
 
 
@@ -146,8 +203,14 @@ async def serve_frontend():
 # ── Events ────────────────────────────────────────────────────────────────────
 
 @app.get("/api/events")
-def list_events(sort: str = "date_desc", db: Session = Depends(get_db)):
+def list_events(
+    sort: str = "date_desc",
+    workspace_id: Optional[int] = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
     q = db.query(Event)
+    if workspace_id:
+        q = q.filter(Event.workspace_id == workspace_id)
     if sort == "date_asc":
         q = q.order_by(Event.date.asc().nullslast())
     else:
@@ -159,11 +222,13 @@ def list_events(sort: str = "date_desc", db: Session = Depends(get_db)):
 async def import_from_luma(
     payload: EventCreate,
     background_tasks: BackgroundTasks,
+    workspace_id: Optional[int] = Depends(get_workspace_id),
     db: Session = Depends(get_db),
 ):
     token = payload.auth_token or ""
     if not token.strip():
-        row = db.query(Setting).filter(Setting.key == "luma_token").first()
+        key = _ws_key(workspace_id, "luma_token") if workspace_id else "luma_token"
+        row = db.query(Setting).filter(Setting.key == key).first()
         token = row.value if row else ""
     if not token.strip():
         raise HTTPException(
@@ -175,9 +240,13 @@ async def import_from_luma(
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-    event = db.query(Event).filter(Event.luma_id == data["luma_id"]).first()
+    event = db.query(Event).filter(
+        Event.luma_id == data["luma_id"],
+        Event.workspace_id == workspace_id,
+    ).first()
     if not event:
         event = Event(
+            workspace_id=workspace_id,
             luma_id=data["luma_id"],
             name=data["name"],
             url=payload.url,
@@ -201,27 +270,16 @@ async def import_from_luma(
         if existing:
             continue
         score, label, reason = score_participant(
-            parsed["name"],
-            parsed.get("company"),
-            parsed.get("job_title"),
-            parsed.get("bio"),
-            None,
+            parsed["name"], parsed.get("company"), parsed.get("job_title"),
+            parsed.get("bio"), None,
         )
-        p = Participant(
-            event_id=event.id,
-            score=score,
-            score_label=label,
-            score_reason=reason,
-            **{k: v for k, v in parsed.items()},
-        )
+        p = Participant(event_id=event.id, score=score, score_label=label, score_reason=reason,
+                        **{k: v for k, v in parsed.items()})
         db.add(p)
         added += 1
 
-    event.participant_count = db.query(Participant).filter(
-        Participant.event_id == event.id
-    ).count()
+    event.participant_count = db.query(Participant).filter(Participant.event_id == event.id).count()
     db.commit()
-
     return {"event": _event_dict(event), "imported": added}
 
 
@@ -229,9 +287,10 @@ async def import_from_luma(
 def create_manual_event(
     name: str = Form(...),
     url: str = Form(""),
+    workspace_id: Optional[int] = Depends(get_workspace_id),
     db: Session = Depends(get_db),
 ):
-    event = Event(name=name, url=url)
+    event = Event(name=name, url=url, workspace_id=workspace_id)
     db.add(event)
     db.commit()
     db.refresh(event)
@@ -268,8 +327,7 @@ def list_participants(
         )
     if priority:
         q = q.filter(Participant.score_label == priority)
-    participants = q.order_by(Participant.score.desc()).all()
-    return [_participant_dict(p) for p in participants]
+    return [_participant_dict(p) for p in q.order_by(Participant.score.desc()).all()]
 
 
 @app.post("/api/events/{event_id}/participants")
@@ -281,17 +339,11 @@ def add_participant(
     event = db.query(Event).filter(Event.id == event_id).first()
     if not event:
         raise HTTPException(status_code=404, detail="Event not found")
-
     score, label, reason = score_participant(
         payload.name, payload.company, payload.job_title, payload.bio, None
     )
-    p = Participant(
-        event_id=event_id,
-        score=score,
-        score_label=label,
-        score_reason=reason,
-        **payload.model_dump(),
-    )
+    p = Participant(event_id=event_id, score=score, score_label=label, score_reason=reason,
+                    **payload.model_dump())
     db.add(p)
     event.participant_count = (event.participant_count or 0) + 1
     db.commit()
@@ -318,35 +370,25 @@ async def import_csv(
         name = row.get("name") or row.get("Name") or row.get("nom") or ""
         if not name.strip():
             continue
-        company = row.get("company") or row.get("Company") or row.get("société") or None
+        company   = row.get("company") or row.get("Company") or row.get("société") or None
         job_title = row.get("job_title") or row.get("title") or row.get("Job Title") or row.get("poste") or None
-        email = row.get("email") or row.get("Email") or None
-        linkedin = row.get("linkedin") or row.get("LinkedIn") or None
-        twitter = row.get("twitter") or row.get("Twitter") or None
-        telegram = row.get("telegram") or row.get("Telegram") or None
-        bio = row.get("bio") or row.get("Bio") or None
+        email     = row.get("email") or row.get("Email") or None
+        linkedin  = row.get("linkedin") or row.get("LinkedIn") or None
+        twitter   = row.get("twitter") or row.get("Twitter") or None
+        telegram  = row.get("telegram") or row.get("Telegram") or None
+        bio       = row.get("bio") or row.get("Bio") or None
 
         score, label, reason = score_participant(name, company, job_title, bio, None)
         p = Participant(
-            event_id=event_id,
-            name=name.strip(),
-            company=company,
-            job_title=job_title,
-            email=email,
-            linkedin_url=linkedin,
-            twitter_handle=twitter,
-            telegram_handle=telegram,
-            bio=bio,
-            score=score,
-            score_label=label,
-            score_reason=reason,
+            event_id=event_id, name=name.strip(), company=company, job_title=job_title,
+            email=email, linkedin_url=linkedin, twitter_handle=twitter,
+            telegram_handle=telegram, bio=bio,
+            score=score, score_label=label, score_reason=reason,
         )
         db.add(p)
         added += 1
 
-    event.participant_count = db.query(Participant).filter(
-        Participant.event_id == event_id
-    ).count()
+    event.participant_count = db.query(Participant).filter(Participant.event_id == event_id).count()
     db.commit()
     return {"imported": added}
 
@@ -405,21 +447,15 @@ async def _do_enrich(participant_id: int):
         p = db.query(Participant).filter(Participant.id == participant_id).first()
         if not p:
             return
-        updates = await enrich_participant(
-            p.name, p.company, p.job_title, p.linkedin_url
-        )
+        updates = await enrich_participant(p.name, p.company, p.job_title, p.linkedin_url)
         for k, v in updates.items():
             if v and not getattr(p, k):
                 setattr(p, k, v)
-        # Re-score with enriched data
         score, label, reason = score_participant(
             p.name, p.company, p.job_title, p.bio, p.company_description
         )
-        p.score = score
-        p.score_label = label
-        p.score_reason = reason
-        p.enriched = True
-        p.enriching = False
+        p.score = score; p.score_label = label; p.score_reason = reason
+        p.enriched = True; p.enriching = False
         db.commit()
     except Exception:
         p = db.query(Participant).filter(Participant.id == participant_id).first()
@@ -441,6 +477,7 @@ async def _do_enrich_batch(ids: list[int]):
 def _event_dict(e: Event) -> dict:
     return {
         "id": e.id,
+        "workspace_id": e.workspace_id,
         "luma_id": e.luma_id,
         "name": e.name,
         "url": e.url,
