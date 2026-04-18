@@ -96,7 +96,21 @@
         class="w-full bg-indigo-600 hover:bg-indigo-700 text-white py-2 rounded-lg text-sm font-medium transition">
         Enregistrer
       </button>
-      <button onclick="deleteCurrentWorkspace()"
+      <!-- Inline delete confirmation — no window.confirm() -->
+      <div id="ws-delete-confirm" class="hidden border border-red-200 rounded-lg p-3 bg-red-50 space-y-2">
+        <p class="text-xs text-red-700 font-medium">Supprimer cet espace et toutes ses données ? Cette action est irréversible.</p>
+        <div class="flex gap-2">
+          <button onclick="document.getElementById('ws-delete-confirm').classList.add('hidden')"
+            class="flex-1 text-xs border border-gray-200 bg-white text-gray-600 py-1.5 rounded-lg transition hover:bg-gray-50">
+            Annuler
+          </button>
+          <button onclick="deleteCurrentWorkspace()"
+            class="flex-1 text-xs bg-red-600 hover:bg-red-700 text-white py-1.5 rounded-lg font-medium transition">
+            Supprimer
+          </button>
+        </div>
+      </div>
+      <button onclick="document.getElementById('ws-delete-confirm').classList.remove('hidden')"
         class="w-full bg-red-50 hover:bg-red-100 text-red-600 border border-red-200 py-2 rounded-lg text-sm font-medium transition">
         Supprimer cet espace…
       </button>
@@ -444,7 +458,6 @@ function hideWorkspaceScreen() {
 }
 
 function switchWorkspace() {
-  if (!confirm('Changer d\'espace de travail ?')) return;
   localStorage.removeItem('workspace');
   currentWorkspace = null;
   currentEventId = null;
@@ -467,6 +480,7 @@ function openWsSettings() {
 
 function closeWsSettings() {
   document.getElementById('ws-settings-modal').classList.add('hidden');
+  document.getElementById('ws-delete-confirm').classList.add('hidden');
 }
 
 async function saveWsSettings() {
@@ -504,7 +518,6 @@ async function saveWsSettings() {
 
 async function deleteCurrentWorkspace() {
   if (!currentWorkspace) return;
-  if (!confirm(`Supprimer l'espace "${currentWorkspace.name}" et toutes ses données ? Cette action est irréversible.`)) return;
   try {
     const resp = await apiFetch(`${API}/api/workspaces/${currentWorkspace.id}`, { method: 'DELETE' });
     if (!resp.ok) {
