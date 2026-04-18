@@ -60,6 +60,22 @@ def _migrate(engine):
         except Exception:
             pass
 
+        # Migrate old global luma_token → ws_1:luma_token
+        try:
+            old = conn.execute(text(
+                "SELECT value FROM settings WHERE key = 'luma_token'"
+            )).fetchone()
+            new = conn.execute(text(
+                "SELECT value FROM settings WHERE key = 'ws_1:luma_token'"
+            )).fetchone()
+            if old and old[0] and not (new and new[0]):
+                conn.execute(text(
+                    "INSERT INTO settings (key, value) VALUES ('ws_1:luma_token', :v)"
+                ), {"v": old[0]})
+                conn.commit()
+        except Exception:
+            pass
+
 
 def get_db():
     db = SessionLocal()
