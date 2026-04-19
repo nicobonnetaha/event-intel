@@ -10,7 +10,13 @@ if _DATABASE_URL:
         _DATABASE_URL = _DATABASE_URL.replace("postgres://", "postgresql://", 1)
     engine = create_engine(_DATABASE_URL, pool_pre_ping=True)
 else:
-    _DB_PATH = _os.path.join(_os.path.dirname(__file__), "event_intel.db")
+    # On Vercel/Lambda, /var/task is read-only — use /tmp which is writable.
+    # Locally, keep the file next to this module for persistence.
+    _IS_VERCEL = _os.environ.get("VERCEL") or _os.environ.get("AWS_LAMBDA_FUNCTION_NAME")
+    if _IS_VERCEL:
+        _DB_PATH = "/tmp/event_intel.db"
+    else:
+        _DB_PATH = _os.path.join(_os.path.dirname(__file__), "event_intel.db")
     engine = create_engine(
         f"sqlite:///{_DB_PATH}",
         connect_args={"check_same_thread": False},

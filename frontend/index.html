@@ -852,7 +852,7 @@ function participantRow(p, i) {
     : p.enriching
     ? `<span class="text-xs text-indigo-500 spinning inline-block">◌</span>`
     : `<button onclick="enrichOne(${p.id})" class="text-xs text-indigo-500 hover:text-indigo-700">✨</button>`;
-  const favBtn = `<button onclick="toggleFavorite(${p.id}, ${p.is_favorite})" title="${p.is_favorite ? 'Retirer des favoris' : 'Ajouter aux favoris'}" class="text-base leading-none transition ${p.is_favorite ? 'text-amber-400' : 'text-gray-200 hover:text-amber-400'}">${p.is_favorite ? '⭐' : '☆'}</button>`;
+  const favBtn = `<button data-fav-id="${p.id}" onclick="toggleFavorite(${p.id}, ${p.is_favorite})" title="${p.is_favorite ? 'Retirer des favoris' : 'Ajouter aux favoris'}" class="text-base leading-none transition ${p.is_favorite ? 'text-amber-400' : 'text-gray-200 hover:text-amber-400'}">${p.is_favorite ? '⭐' : '☆'}</button>`;
   const eventCol = currentView === 'favorites'
     ? `<td class="py-2.5 px-3 text-xs text-gray-400 truncate max-w-[110px]">${escHtml(p.event_name||'')}</td>`
     : '';
@@ -1000,33 +1000,56 @@ async function loadFavorites() {
 
 async function toggleFavorite(id, currentVal) {
   const newVal = !currentVal;
-  await apiFetch(`${API}/api/participants/${id}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ is_favorite: newVal }),
-  });
-  // Refresh count badge
-  const favResp = await apiFetch(`${API}/api/favorites`);
-  const favList = await favResp.json();
-  const cnt = document.getElementById('favorites-count');
-  if (cnt) cnt.textContent = favList.length ? `${favList.length}` : '';
 
-  if (currentView === 'favorites') {
-    favoritesParticipants = favList;
-    allParticipants = favList;
-    renderParticipants(sortedParticipants(favList));
-    updateStats(favList);
-  } else if (currentView === 'event') {
-    await loadParticipants();
+  // Optimistic UI update — instant feedback
+  _applyFavUI(id, newVal);
+
+  try {
+    const resp = await apiFetch(`${API}/api/participants/${id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ is_favorite: newVal }),
+    });
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+
+    // Refresh favorites count badge
+    const favResp = await apiFetch(`${API}/api/favorites`);
+    const favList = await favResp.json();
+    const cnt = document.getElementById('favorites-count');
+    if (cnt) cnt.textContent = favList.length ? `${favList.length}` : '';
+
+    if (currentView === 'favorites') {
+      favoritesParticipants = favList;
+      allParticipants = favList;
+      renderParticipants(sortedParticipants(favList));
+      updateStats(favList);
+    } else if (currentView === 'event') {
+      // Update local array to keep star state without full reload
+      const p = allParticipants.find(x => x.id === id);
+      if (p) p.is_favorite = newVal;
+    }
+  } catch (e) {
+    // Revert optimistic update on error
+    _applyFavUI(id, currentVal);
+    console.error('toggleFavorite failed:', e);
   }
+}
+
+function _applyFavUI(id, isFav) {
   // Update panel button if open
   const btn = document.getElementById(`fav-btn-${id}`);
   if (btn) {
-    btn.textContent = newVal ? '⭐' : '☆';
-    btn.title = newVal ? 'Retirer des favoris' : 'Ajouter aux favoris';
-    btn.className = `text-2xl leading-none flex-shrink-0 transition ${newVal ? 'text-amber-400' : 'text-gray-200 hover:text-amber-400'}`;
-    btn.setAttribute('onclick', `toggleFavorite(${id}, ${newVal})`);
+    btn.textContent = isFav ? '⭐' : '☆';
+    btn.title = isFav ? 'Retirer des favoris' : 'Ajouter aux favoris';
+    btn.className = `text-2xl leading-none flex-shrink-0 transition ${isFav ? 'text-amber-400' : 'text-gray-200 hover:text-amber-400'}`;
+    btn.setAttribute('onclick', `toggleFavorite(${id}, ${isFav})`);
   }
+  // Update table row star button
+  document.querySelectorAll(`[data-fav-id="${id}"]`).forEach(el => {
+    el.textContent = isFav ? '⭐' : '☆';
+    el.className = `text-base leading-none transition ${isFav ? 'text-amber-400' : 'text-gray-200 hover:text-amber-400'}`;
+    el.setAttribute('onclick', `toggleFavorite(${id}, ${isFav})`);
+  });
 }
 
 async function saveNote(id, text) {

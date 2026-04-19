@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, UploadFile, File, Form
+from fastapi import BackgroundTasks, Body, Depends, FastAPI, Header, HTTPException, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -105,7 +105,7 @@ def list_workspaces(db: Session = Depends(get_db)):
 
 
 @app.patch("/api/workspaces/{workspace_id}")
-def rename_workspace(workspace_id: int, payload: dict, db: Session = Depends(get_db)):
+def rename_workspace(workspace_id: int, payload: dict = Body(...), db: Session = Depends(get_db)):
     ws = db.query(Workspace).filter(Workspace.id == workspace_id).first()
     if not ws:
         raise HTTPException(status_code=404, detail="Workspace introuvable")
@@ -519,7 +519,7 @@ async def import_csv(
 
 
 @app.patch("/api/participants/{participant_id}")
-def update_participant(participant_id: int, payload: dict, db: Session = Depends(get_db)):
+def update_participant(participant_id: int, payload: dict = Body(...), db: Session = Depends(get_db)):
     p = db.query(Participant).filter(Participant.id == participant_id).first()
     if not p:
         raise HTTPException(status_code=404, detail="Not found")
