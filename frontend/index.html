@@ -156,7 +156,16 @@
     <div id="luma-status-badge" class="hidden text-xs text-center py-1.5 rounded-lg"></div>
   </div>
 
-  <div class="px-3 pt-2 pb-1 flex items-center justify-between flex-shrink-0">
+  <!-- Favoris -->
+  <div class="px-2 pt-2 pb-1 flex-shrink-0">
+    <button id="favorites-btn" onclick="showFavorites()"
+      class="w-full flex items-center gap-2 px-3 py-2 rounded-lg text-sm font-medium text-gray-600 hover:bg-amber-50 hover:text-amber-700 transition">
+      <span>⭐</span><span>Favoris</span>
+      <span id="favorites-count" class="ml-auto text-xs text-gray-400"></span>
+    </button>
+  </div>
+
+  <div class="px-3 pt-1 pb-1 flex items-center justify-between flex-shrink-0">
     <span class="text-xs font-semibold text-gray-400 uppercase tracking-wide">Événements</span>
     <div class="flex items-center gap-2">
       <button id="sort-btn" onclick="toggleSort()"
@@ -210,8 +219,12 @@
         class="text-sm bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 px-3 py-1.5 rounded-lg font-medium transition">
         ✨ Enrichir tout
       </button>
-      <label class="text-sm bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-700 px-3 py-1.5 rounded-lg font-medium cursor-pointer transition">
-        ↑ CSV
+      <button onclick="exportCSV()"
+        class="text-sm bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-700 px-3 py-1.5 rounded-lg font-medium transition">
+        ↓ CSV
+      </button>
+      <label id="import-csv-btn" class="text-sm bg-gray-50 hover:bg-gray-100 border border-gray-200 text-gray-700 px-3 py-1.5 rounded-lg font-medium cursor-pointer transition">
+        ↑ Import
         <input type="file" accept=".csv" class="hidden" onchange="importCSV(event)" />
       </label>
     </div>
@@ -356,7 +369,9 @@
 const API = '';
 let currentWorkspace = null;  // { id, name }
 let currentEventId = null;
+let currentView = 'dashboard'; // 'dashboard' | 'event' | 'favorites'
 let allParticipants = [];
+let favoritesParticipants = [];
 let enrichInterval = null;
 let currentSort = 'date_desc';
 let participantSort = { key: 'score', dir: 'desc' };
@@ -548,6 +563,11 @@ function initApp() {
   loadEvents();
   checkLumaConnection();
   loadDashboard();
+  // Init favorites count badge
+  apiFetch(`${API}/api/favorites`).then(r => r.json()).then(list => {
+    const cnt = document.getElementById('favorites-count');
+    if (cnt && list.length) cnt.textContent = `${list.length}`;
+  }).catch(() => {});
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -580,7 +600,7 @@ function renderEventList(events) {
                 class="text-gray-300 hover:text-red-400 text-xs leading-none flex-shrink-0">✕</button>` : ''}
             </div>
             <p class="text-xs text-gray-400 mt-0.5">${e.participant_count || 0} participants</p>
-            ${e.date ? `<p class="text-xs text-gray-400">${formatDate(e.date)}</p>` : ''}
+            ${e.date ? `<p class="text-xs text-gray-400">${formatDate(e.date)}${isFuture(e.date) ? ' <span class="text-green-600 font-semibold">· À venir</span>' : ''}</p>` : ''}
           </div>
         </div>
       </div>`;
@@ -590,11 +610,13 @@ function renderEventList(events) {
 async function selectEvent(id, name, date, location) {
   if (selectMode) return;
   currentEventId = id;
+  currentView = 'event';
   document.getElementById('toolbar').classList.remove('hidden');
   document.getElementById('stats-bar').classList.remove('hidden');
+  document.getElementById('import-csv-btn').classList.remove('hidden');
   document.getElementById('event-header').innerHTML = `
     <h1 class="text-base font-semibold">${escHtml(name)}</h1>
-    <p class="text-xs text-gray-400">${location ? escHtml(location) + ' · ' : ''}${date ? formatDate(date) : ''}</p>`;
+    <p class="text-xs text-gray-400">${location ? escHtml(location) + ' · ' : ''}${date ? formatDate(date) : ''}${isFuture(date) ? ' · <span class="text-green-600 font-semibold">À venir</span>' : ''}</p>`;
   document.getElementById('search').value = '';
   document.getElementById('priority-filter').value = '';
   await loadParticipants();
@@ -613,6 +635,7 @@ async function deleteEvent(id) {
 
 function showDashboard() {
   currentEventId = null;
+  currentView = 'dashboard';
   document.getElementById('toolbar').classList.add('hidden');
   document.getElementById('stats-bar').classList.add('hidden');
   document.getElementById('event-header').innerHTML =
@@ -806,10 +829,11 @@ function renderParticipants(list) {
           ${thClass('name')}Participant${participantSort.key==='name'?(participantSort.dir==='asc'?' ↑':' ↓'):''}</th>
           ${thClass('company')}Société${participantSort.key==='company'?(participantSort.dir==='asc'?' ↑':' ↓'):''}</th>
           ${thClass('job_title')}Poste${participantSort.key==='job_title'?(participantSort.dir==='asc'?' ↑':' ↓'):''}</th>
+          ${currentView === 'favorites' ? '<th class="text-left py-3 px-3 text-xs font-semibold text-gray-500 w-28">Événement</th>' : ''}
           ${thClass('score')}<span class="w-28 inline-block">Score${participantSort.key==='score'?(participantSort.dir==='asc'?' ↑':' ↓'):''}</span></th>
           ${thClass('priority')}Priorité${participantSort.key==='priority'?(participantSort.dir==='asc'?' ↑':' ↓'):''}</th>
           <th class="text-left py-3 px-3 text-xs font-semibold text-gray-500 w-28">Contacts</th>
-          <th class="text-left py-3 px-3 text-xs font-semibold text-gray-500 w-16">Actions</th>
+          <th class="text-left py-3 px-3 text-xs font-semibold text-gray-500 w-20">Actions</th>
         </tr>
       </thead>
       <tbody>${list.map((p, i) => participantRow(p, i)).join('')}</tbody>
@@ -828,12 +852,17 @@ function participantRow(p, i) {
     : p.enriching
     ? `<span class="text-xs text-indigo-500 spinning inline-block">◌</span>`
     : `<button onclick="enrichOne(${p.id})" class="text-xs text-indigo-500 hover:text-indigo-700">✨</button>`;
+  const favBtn = `<button onclick="toggleFavorite(${p.id}, ${p.is_favorite})" title="${p.is_favorite ? 'Retirer des favoris' : 'Ajouter aux favoris'}" class="text-base leading-none transition ${p.is_favorite ? 'text-amber-400' : 'text-gray-200 hover:text-amber-400'}">${p.is_favorite ? '⭐' : '☆'}</button>`;
+  const eventCol = currentView === 'favorites'
+    ? `<td class="py-2.5 px-3 text-xs text-gray-400 truncate max-w-[110px]">${escHtml(p.event_name||'')}</td>`
+    : '';
   return `
     <tr class="border-b border-gray-100 cursor-pointer" onclick="openPanel(${p.id})">
       <td class="py-2.5 px-3 text-gray-400 text-xs">${i+1}</td>
       <td class="py-2.5 px-3"><div class="flex items-center gap-2">${avatar}<span class="font-medium truncate max-w-[120px]">${escHtml(p.name)}</span></div></td>
       <td class="py-2.5 px-3 text-gray-600 truncate max-w-[130px]">${escHtml(p.company||'—')}</td>
       <td class="py-2.5 px-3 text-gray-500 truncate max-w-[140px]">${escHtml(p.job_title||'—')}</td>
+      ${eventCol}
       <td class="py-2.5 px-3">
         <div class="flex items-center gap-1.5">
           <span class="text-xs font-bold w-6">${Math.round(p.score)}</span>
@@ -842,7 +871,7 @@ function participantRow(p, i) {
       </td>
       <td class="py-2.5 px-3"><span class="tag ${lc}">${escHtml(p.score_label||'—')}</span></td>
       <td class="py-2.5 px-3 text-sm font-medium space-x-1">${contacts}</td>
-      <td class="py-2.5 px-3" onclick="event.stopPropagation()">${enrichBtn}</td>
+      <td class="py-2.5 px-3" onclick="event.stopPropagation()"><div class="flex items-center gap-2">${favBtn}${enrichBtn}</div></td>
     </tr>`;
 }
 
@@ -896,7 +925,13 @@ async function openPanel(id) {
     <div class="flex items-start gap-4 mb-4">
       ${avatar}
       <div class="flex-1 min-w-0">
-        <h2 class="font-semibold text-base leading-tight">${escHtml(p.name)}</h2>
+        <div class="flex items-start justify-between gap-2">
+          <h2 class="font-semibold text-base leading-tight">${escHtml(p.name)}</h2>
+          <button id="fav-btn-${p.id}" onclick="toggleFavorite(${p.id}, ${p.is_favorite})" title="${p.is_favorite ? 'Retirer des favoris' : 'Ajouter aux favoris'}"
+            class="text-2xl leading-none flex-shrink-0 transition ${p.is_favorite ? 'text-amber-400' : 'text-gray-200 hover:text-amber-400'}">
+            ${p.is_favorite ? '⭐' : '☆'}
+          </button>
+        </div>
         ${p.job_title ? `<p class="text-sm text-gray-600 mt-0.5">${escHtml(p.job_title)}</p>` : ''}
         ${p.company   ? `<p class="text-sm font-medium text-indigo-600 mt-0.5">${escHtml(p.company)}</p>` : ''}
         ${p.location  ? `<p class="text-xs text-gray-400 mt-1">📍 ${escHtml(p.location)}</p>` : ''}
@@ -919,9 +954,16 @@ async function openPanel(id) {
     ${p.company_description ? `<div class="mb-4"><p class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">À propos de ${escHtml(p.company||'la société')}</p><p class="text-sm text-gray-600 leading-relaxed">${escHtml(p.company_description)}</p></div>` : ''}
     ${!p.enriched
       ? `<button onclick="enrichOne(${p.id}); closePanel()"
-          class="w-full text-sm bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 py-2 rounded-lg font-medium transition">
+          class="w-full text-sm bg-indigo-50 hover:bg-indigo-100 text-indigo-700 border border-indigo-200 py-2 rounded-lg font-medium transition mb-4">
           ✨ Enrichir ce profil</button>`
-      : `<p class="text-xs text-center text-gray-400">✓ Profil enrichi</p>`}`;
+      : `<p class="text-xs text-center text-gray-400 mb-4">✓ Profil enrichi</p>`}
+    <div class="mb-2">
+      <p class="text-xs font-semibold text-gray-400 uppercase tracking-wide mb-1">Notes privées</p>
+      <textarea id="notes-${p.id}" rows="4" placeholder="Tes annotations sur ce contact…"
+        class="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-300 resize-none"
+        onblur="saveNote(${p.id}, this.value)">${escHtml(p.notes||'')}</textarea>
+      <p class="text-xs text-gray-400 mt-1">Sauvegardé automatiquement</p>
+    </div>`;
   document.getElementById('detail-panel').classList.remove('hidden');
   document.getElementById('panel-overlay').classList.remove('hidden');
 }
@@ -929,6 +971,95 @@ async function openPanel(id) {
 function closePanel() {
   document.getElementById('detail-panel').classList.add('hidden');
   document.getElementById('panel-overlay').classList.add('hidden');
+}
+
+// ── Favorites ─────────────────────────────────────────────────────────────────
+
+async function showFavorites() {
+  currentEventId = null;
+  currentView = 'favorites';
+  document.getElementById('toolbar').classList.remove('hidden');
+  document.getElementById('stats-bar').classList.remove('hidden');
+  document.getElementById('import-csv-btn').classList.add('hidden');
+  document.getElementById('event-header').innerHTML =
+    `<h1 class="text-base font-semibold text-gray-700">⭐ Favoris</h1>`;
+  renderEventList(cachedEvents);
+  await loadFavorites();
+}
+
+async function loadFavorites() {
+  const resp = await apiFetch(`${API}/api/favorites`);
+  favoritesParticipants = await resp.json();
+  allParticipants = favoritesParticipants;
+  renderParticipants(sortedParticipants(favoritesParticipants));
+  updateStats(favoritesParticipants);
+  // Update count badge
+  const cnt = document.getElementById('favorites-count');
+  if (cnt) cnt.textContent = favoritesParticipants.length ? `${favoritesParticipants.length}` : '';
+}
+
+async function toggleFavorite(id, currentVal) {
+  const newVal = !currentVal;
+  await apiFetch(`${API}/api/participants/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_favorite: newVal }),
+  });
+  // Refresh count badge
+  const favResp = await apiFetch(`${API}/api/favorites`);
+  const favList = await favResp.json();
+  const cnt = document.getElementById('favorites-count');
+  if (cnt) cnt.textContent = favList.length ? `${favList.length}` : '';
+
+  if (currentView === 'favorites') {
+    favoritesParticipants = favList;
+    allParticipants = favList;
+    renderParticipants(sortedParticipants(favList));
+    updateStats(favList);
+  } else if (currentView === 'event') {
+    await loadParticipants();
+  }
+  // Update panel button if open
+  const btn = document.getElementById(`fav-btn-${id}`);
+  if (btn) {
+    btn.textContent = newVal ? '⭐' : '☆';
+    btn.title = newVal ? 'Retirer des favoris' : 'Ajouter aux favoris';
+    btn.className = `text-2xl leading-none flex-shrink-0 transition ${newVal ? 'text-amber-400' : 'text-gray-200 hover:text-amber-400'}`;
+    btn.setAttribute('onclick', `toggleFavorite(${id}, ${newVal})`);
+  }
+}
+
+async function saveNote(id, text) {
+  await apiFetch(`${API}/api/participants/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ notes: text }),
+  });
+}
+
+// ── CSV Export ────────────────────────────────────────────────────────────────
+
+function exportCSV() {
+  const list = currentView === 'favorites' ? favoritesParticipants : allParticipants;
+  if (!list.length) { alert('Aucun participant à exporter.'); return; }
+  const headers = ['Nom', 'Société', 'Poste', 'Email', 'LinkedIn', 'Twitter', 'Telegram', 'Score', 'Priorité', 'Bio', 'Notes'];
+  if (currentView === 'favorites') headers.push('Événement');
+  const rows = list.map(p => [
+    p.name||'', p.company||'', p.job_title||'', p.email||'',
+    p.linkedin_url||'', p.twitter_handle||'', p.telegram_handle||'',
+    Math.round(p.score)||0, p.score_label||'', p.bio||'', p.notes||'',
+    ...(currentView === 'favorites' ? [p.event_name||''] : []),
+  ]);
+  const csv = [headers, ...rows]
+    .map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(','))
+    .join('\n');
+  const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `participants-${new Date().toISOString().slice(0,10)}.csv`;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(url);
 }
 
 // ── Luma connection ───────────────────────────────────────────────────────────
@@ -1141,6 +1272,11 @@ function formatDate(s) {
   if (!s) return '';
   try { return new Date(s).toLocaleDateString('fr-FR',{day:'numeric',month:'short',year:'numeric'}); }
   catch { return s; }
+}
+function isFuture(s) {
+  if (!s) return false;
+  try { return new Date(s) > new Date(); }
+  catch { return false; }
 }
 
 // ── Dashboard ─────────────────────────────────────────────────────────────────

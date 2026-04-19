@@ -32,6 +32,8 @@ def _migrate(engine):
         ("participants", "youtube_handle",   "VARCHAR"),
         ("participants", "website",          "VARCHAR"),
         ("events",       "workspace_id",     "INTEGER"),
+        ("participants", "notes",            "TEXT"),
+        ("participants", "is_favorite",      "BOOLEAN DEFAULT 0"),
     ]
     with engine.connect() as conn:
         for table, col, col_type in col_migrations:

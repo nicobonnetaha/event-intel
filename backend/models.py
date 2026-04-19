@@ -57,4 +57,6 @@ class Participant(Base):
     enriching = Column(Boolean, default=False)
     avatar_url = Column(String, nullable=True)
     location = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
+    is_favorite = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.utcnow)

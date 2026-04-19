@@ -518,6 +518,46 @@ async def import_csv(
     return {"imported": added}
 
 
+@app.patch("/api/participants/{participant_id}")
+def update_participant(participant_id: int, payload: dict, db: Session = Depends(get_db)):
+    p = db.query(Participant).filter(Participant.id == participant_id).first()
+    if not p:
+        raise HTTPException(status_code=404, detail="Not found")
+    if "notes" in payload:
+        p.notes = payload["notes"]
+    if "is_favorite" in payload:
+        p.is_favorite = bool(payload["is_favorite"])
+    db.commit()
+    return _participant_dict(p)
+
+
+@app.get("/api/favorites")
+def get_favorites(
+    workspace_id: Optional[int] = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    events = db.query(Event)
+    if workspace_id:
+        events = events.filter(Event.workspace_id == workspace_id)
+    events = events.all()
+    event_ids = [e.id for e in events]
+    event_name_map = {e.id: e.name for e in events}
+    if not event_ids:
+        return []
+    participants = (
+        db.query(Participant)
+        .filter(Participant.event_id.in_(event_ids), Participant.is_favorite == True)
+        .order_by(Participant.score.desc())
+        .all()
+    )
+    result = []
+    for p in participants:
+        d = _participant_dict(p)
+        d["event_name"] = event_name_map.get(p.event_id, "")
+        result.append(d)
+    return result
+
+
 @app.get("/api/participants/{participant_id}")
 def get_participant(participant_id: int, db: Session = Depends(get_db)):
     p = db.query(Participant).filter(Participant.id == participant_id).first()
@@ -637,4 +677,6 @@ def _participant_dict(p: Participant) -> dict:
         "enriching": p.enriching,
         "avatar_url": p.avatar_url,
         "location": p.location,
+        "notes": p.notes,
+        "is_favorite": bool(p.is_favorite),
     }
