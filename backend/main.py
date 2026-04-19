@@ -214,7 +214,9 @@ async def get_my_luma_events(
             return meta
 
     results = await asyncio.gather(*[fetch_one(eid) for eid in event_ids])
-    events = [r for r in results if r and r.get("approval_status") == "approved"]
+    # Keep any event that has a name — don't filter on approval_status since
+    # guest_data is absent when the user isn't the organizer, giving "unknown".
+    events = [r for r in results if r and r.get("name")]
 
     from datetime import datetime, timezone
 
