@@ -78,7 +78,7 @@ def get_workspace_id(x_workspace_id: Optional[str] = Header(None)) -> Optional[i
 # ── Workspace endpoints ───────────────────────────────────────────────────────
 
 @app.post("/api/workspaces/auth")
-def workspace_auth(payload: dict, db: Session = Depends(get_db)):
+def workspace_auth(payload: dict = Body(...), db: Session = Depends(get_db)):
     """Create or join a workspace."""
     name = (payload.get("name") or "").strip()
     pin  = (payload.get("pin")  or "").strip()
@@ -155,7 +155,7 @@ def get_luma_token(
 
 @app.post("/api/settings/luma-token")
 def save_luma_token(
-    payload: dict,
+    payload: dict = Body(...),
     workspace_id: Optional[int] = Depends(get_workspace_id),
     db: Session = Depends(get_db),
 ):
